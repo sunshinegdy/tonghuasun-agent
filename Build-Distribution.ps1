@@ -28,6 +28,7 @@ function Assert-AdapterVersion([string]$ManifestPath, [string]$AdapterName) {
 Assert-AdapterVersion (Join-Path $agentRoot "codex\.codex-plugin\plugin.json") "Codex"
 Assert-AdapterVersion (Join-Path $agentRoot "claude-code\.claude-plugin\plugin.json") "Claude Code"
 Assert-AdapterVersion (Join-Path $agentRoot "workbuddy\.codebuddy-plugin\plugin.json") "WorkBuddy"
+Assert-AdapterVersion (Join-Path $agentRoot "zcode\.zcode-plugin\plugin.json") "ZCode"
 Assert-AdapterVersion (Join-Path $agentRoot "deepseek-harness\package.json") "DeepSeek Harness"
 
 Push-Location $toolingRoot
@@ -245,6 +246,40 @@ function Assert-WorkBuddyPackage([string]$PackageRoot) {
     }
 }
 
+function Assert-ZCodePackage([string]$PackageRoot) {
+    $manifestPath = Join-Path $PackageRoot ".zcode-plugin\plugin.json"
+    $mcpConfigPath = Join-Path $PackageRoot ".mcp.json"
+    foreach ($requiredPath in @($manifestPath, $mcpConfigPath)) {
+        if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+            throw "ZCode 发行包缺少原生入口：$requiredPath"
+        }
+    }
+
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]$manifest.skills -ne "skills") {
+        throw "ZCode 清单必须从 skills 目录加载技能。"
+    }
+    if ([string]$manifest.mcpServers -ne ".mcp.json") {
+        throw "ZCode 清单必须通过 .mcp.json 加载 MCP。"
+    }
+
+    $mcpConfigText = Get-Content -LiteralPath $mcpConfigPath -Raw -Encoding UTF8
+    if ($mcpConfigText -notmatch [regex]::Escape('${ZCODE_PLUGIN_ROOT}')) {
+        throw "ZCode MCP 配置必须使用 ZCODE_PLUGIN_ROOT。"
+    }
+    foreach ($foreignRoot in @('${CLAUDE_PLUGIN_ROOT}', '${CODEBUDDY_PLUGIN_ROOT}', '${CODEX_PLUGIN_ROOT}')) {
+        if ($mcpConfigText -match [regex]::Escape($foreignRoot)) {
+            throw "ZCode MCP 配置包含其他宿主的根目录变量：$foreignRoot"
+        }
+    }
+
+    foreach ($forbiddenRelativePath in @(".claude-plugin", ".codex-plugin", ".codebuddy-plugin", "zcode")) {
+        if (Test-Path -LiteralPath (Join-Path $PackageRoot $forbiddenRelativePath)) {
+            throw "ZCode 发行包包含其他宿主或嵌套入口：$forbiddenRelativePath"
+        }
+    }
+}
+
 function Compress-Plugin([string]$SourceRoot, [string]$RootName, [string]$ArchiveName) {
     $archiveBaseName = [IO.Path]::GetFileNameWithoutExtension($ArchiveName)
     $container = Join-Path (Split-Path -Parent $SourceRoot) ("archive-" + $archiveBaseName)
@@ -297,6 +332,109 @@ function Assert-WorkBuddyArchive([string]$ArchivePath, [string]$RootName) {
     }
 }
 
+function Assert-ZCodeArchive([string]$ArchivePath, [string]$RootName) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        $entries = @($archive.Entries | ForEach-Object { $_.FullName.Replace("\", "/") })
+        foreach ($requiredEntry in @(
+            "$RootName/.zcode-plugin/plugin.json",
+            "$RootName/.mcp.json",
+            "$RootName/skills/configure-ths/SKILL.md",
+            "$RootName/scripts/tonghuasun-mcp-proxy.mjs"
+        )) {
+            if ($entries -cnotcontains $requiredEntry) {
+                throw "ZCode ZIP 缺少原生入口或公共能力：$requiredEntry"
+            }
+        }
+
+        foreach ($forbiddenPrefix in @(
+            "$RootName/.claude-plugin/",
+            "$RootName/.codex-plugin/",
+            "$RootName/.codebuddy-plugin/"
+        )) {
+            if (@($entries | Where-Object { $_.StartsWith($forbiddenPrefix, [StringComparison]::Ordinal) }).Count -gt 0) {
+                throw "ZCode ZIP 包含其他宿主入口：$forbiddenPrefix"
+            }
+        }
+    }
+    finally {
+        $archive.Dispose()
+    }
+}
+
+function Write-ZCodeMarketplace(
+    [string]$MarketplaceRoot,
+    [string]$PluginSourceRoot,
+    [string]$PluginRoot,
+    [string]$Version
+) {
+    New-Item -ItemType Directory -Path $PluginRoot -Force | Out-Null
+    Get-ChildItem -LiteralPath $PluginSourceRoot -Force |
+        Copy-Item -Destination $PluginRoot -Recurse -Force
+
+    # ZCode 插件本体使用 .zcode-plugin，但 3.8.x 的本地市场仍沿用
+    # Claude 兼容目录读取 marketplace.json，两者不能混用。
+    $marketplaceManifestDirectory = Join-Path $MarketplaceRoot ".claude-plugin"
+    New-Item -ItemType Directory -Path $marketplaceManifestDirectory -Force | Out-Null
+    $marketplaceManifest = [ordered]@{
+        name = "tonghuasun-agent-local"
+        description = "同花顺 Agent 的 ZCode 本地插件市场。"
+        plugins = @(
+            [ordered]@{
+                name = "tonghuasun-agent"
+                source = "./tonghuasun-agent"
+                description = "连接本机同花顺，在 ZCode 中查询行情、持仓并使用实时盯盘。"
+                version = $Version
+                category = "productivity"
+                tags = @("同花顺", "证券", "行情", "MCP")
+                strict = $true
+            }
+        )
+    }
+    $marketplaceManifest |
+        ConvertTo-Json -Depth 8 |
+        Set-Content -LiteralPath (Join-Path $marketplaceManifestDirectory "marketplace.json") -Encoding UTF8
+}
+
+function Assert-ZCodeMarketplace([string]$MarketplaceRoot, [string]$Version) {
+    $manifestPath = Join-Path $MarketplaceRoot ".claude-plugin\marketplace.json"
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw "ZCode 本地市场缺少清单：$manifestPath"
+    }
+
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $plugins = @($manifest.plugins)
+    if ($plugins.Count -ne 1 -or
+        [string]$plugins[0].name -ne "tonghuasun-agent" -or
+        [string]$plugins[0].source -ne "./tonghuasun-agent" -or
+        [string]$plugins[0].version -ne $Version) {
+        throw "ZCode 本地市场条目与插件版本不一致。"
+    }
+
+    Assert-ZCodePackage (Join-Path $MarketplaceRoot "tonghuasun-agent")
+}
+
+function Assert-ZCodeMarketplaceArchive([string]$ArchivePath, [string]$RootName) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        $entries = @($archive.Entries | ForEach-Object { $_.FullName.Replace("\", "/") })
+        foreach ($requiredEntry in @(
+            "$RootName/.claude-plugin/marketplace.json",
+            "$RootName/tonghuasun-agent/.zcode-plugin/plugin.json",
+            "$RootName/tonghuasun-agent/.mcp.json"
+        )) {
+            if ($entries -cnotcontains $requiredEntry) {
+                throw "ZCode 本地市场 ZIP 缺少：$requiredEntry"
+            }
+        }
+    }
+    finally {
+        $archive.Dispose()
+    }
+}
+
 $temporaryRoot = Join-Path $temporaryBase ("distribution-" + $releaseVersion + "-" + $PID)
 $resolvedTemporaryBase = [IO.Path]::GetFullPath($temporaryBase).TrimEnd("\") + "\"
 $resolvedTemporaryRoot = [IO.Path]::GetFullPath($temporaryRoot)
@@ -338,6 +476,31 @@ try {
     $workBuddyArtifact = Compress-Plugin $workBuddyStage "tonghuasun-agent" "tonghuasun-agent-workbuddy-$releaseVersion.zip"
     Assert-WorkBuddyArchive $workBuddyArtifact "tonghuasun-agent"
     $builtArtifacts += $workBuddyArtifact
+
+    $zCodeStage = Join-Path $resolvedTemporaryRoot "zcode"
+    New-Item -ItemType Directory -Path $zCodeStage -Force | Out-Null
+    Copy-ReleaseTree (Join-Path $agentRoot "zcode") $zCodeStage
+    Copy-Item -LiteralPath (Join-Path $agentRoot "zcode\.mcp.json") -Destination (Join-Path $zCodeStage ".mcp.json")
+    Copy-CommonPackage $zCodeStage
+    Assert-StagedPackage $zCodeStage "ZCode"
+    Assert-ZCodePackage $zCodeStage
+
+    $zCodeMarketplaceStage = Join-Path $resolvedTemporaryRoot "zcode-marketplace"
+    $zCodeMarketplacePluginRoot = Join-Path $zCodeMarketplaceStage "tonghuasun-agent"
+    New-Item -ItemType Directory -Path $zCodeMarketplaceStage -Force | Out-Null
+    Write-ZCodeMarketplace $zCodeMarketplaceStage $zCodeStage $zCodeMarketplacePluginRoot $releaseVersion
+    Assert-ZCodeMarketplace $zCodeMarketplaceStage $releaseVersion
+
+    $zCodeArtifact = Compress-Plugin $zCodeStage "tonghuasun-agent" "tonghuasun-agent-zcode-$releaseVersion.zip"
+    Assert-ZCodeArchive $zCodeArtifact "tonghuasun-agent"
+    $builtArtifacts += $zCodeArtifact
+
+    $zCodeMarketplaceArtifact = Compress-Plugin `
+        $zCodeMarketplaceStage `
+        "tonghuasun-agent-zcode-marketplace" `
+        "tonghuasun-agent-zcode-marketplace-$releaseVersion.zip"
+    Assert-ZCodeMarketplaceArchive $zCodeMarketplaceArtifact "tonghuasun-agent-zcode-marketplace"
+    $builtArtifacts += $zCodeMarketplaceArtifact
 
     $dshStage = Join-Path $resolvedTemporaryRoot "deepseek-harness"
     New-Item -ItemType Directory -Path $dshStage -Force | Out-Null

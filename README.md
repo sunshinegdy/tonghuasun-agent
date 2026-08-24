@@ -1,6 +1,6 @@
 # tonghuasun-agent
 
-让 Codex、Claude Code、WorkBuddy 和 DeepSeek Harness 使用你电脑上的同花顺。
+让 Codex、Claude Code、WorkBuddy、ZCode 和 DeepSeek Harness 使用你电脑上的同花顺。
 
 所有功能均免费开放，不设订阅、会员、套餐、试用额度或付费解锁。
 
@@ -9,6 +9,7 @@
 - [Codex 安装说明](./codex/README.md)
 - [Claude Code 安装说明](./claude-code/README.md)
 - [WorkBuddy 安装说明](./workbuddy/README.md)
+- [ZCode 安装说明](./zcode/README.md)
 - [DeepSeek Harness 安装说明](./deepseek-harness/README.md)
 
 ## 可以做什么
@@ -18,7 +19,7 @@
 - 接收实时行情并使用盯盘界面
 - 在明确开启后使用交易工具
 
-四个 Agent 入口连接同一个本机同花顺服务，功能与本机配置保持一致。
+五个 Agent 入口连接同一个本机同花顺服务，功能与本机配置保持一致。
 
 ## 使用要求
 
@@ -36,6 +37,7 @@ tonghuasun-agent/
   codex/               # Codex 插件
   claude-code/         # Claude Code 插件
   workbuddy/           # WorkBuddy 插件
+  zcode/               # ZCode 插件
   deepseek-harness/    # DeepSeek Harness 插件
   tonghuasun-mcp/      # 同花顺本机服务、配置器和 SDK
   docs/                # 架构文档
@@ -50,7 +52,7 @@ tonghuasun-agent/
 .\Build-Distribution.ps1
 ```
 
-构建完成后，`artifacts/` 中会生成 Codex、Claude Code、WorkBuddy 和 DeepSeek Harness 的安装包。
+构建完成后，`artifacts/` 中会生成 Codex、Claude Code、WorkBuddy、ZCode 和 DeepSeek Harness 的安装包。
 
 ## 支持项目
 

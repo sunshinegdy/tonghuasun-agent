@@ -16,6 +16,7 @@
 !/codex/.mcp.json
 !/claude-code/.mcp.json
 !/workbuddy/.mcp.json
+!/zcode/.mcp.json
 **/.env
 **/.env.local
 **/.secrets/

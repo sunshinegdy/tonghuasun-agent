@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "releaseVersion": "0.2.4",
-  "generatedAtUtc": "2026-08-24T13:55:06.3948763Z",
+  "releaseVersion": "0.2.5",
+  "generatedAtUtc": "2026-08-24T14:52:23.0421861Z",
   "files": [
     {
       "name": "Microsoft.Extensions.Logging.Abstractions.dll",
@@ -21,32 +21,32 @@
     {
       "name": "ThsPlugin.Abstractions.dll",
       "size": 10240,
-      "sha256": "c00363a2687273ff550cdbd34bf7ab4bad51ef31a98230ba3dd2ed005ce8968d"
+      "sha256": "99b594b9f88ed1121028142acf81b7cfb52e0e8562c2849cb5e1e13ac2caa911"
     },
     {
       "name": "ThsPlugin.Adapters.Hevo.dll",
       "size": 544256,
-      "sha256": "5f20af8735bf345fa0ae5bf5590e4a3176fdbb1d513c947647d689ebd5becd33"
+      "sha256": "650920073b9968ecbf38156983506f53b17d1fc2e4861b88bd6eac37fcfcb1a7"
     },
     {
       "name": "ThsPlugin.Application.dll",
       "size": 8192,
-      "sha256": "150e5be8eecb47baeb80db3dd36c6edb9eca50665c7343bed47caf48f51d85f8"
+      "sha256": "2fa0a9af65eb325d7f6604e68139988a72fbc5789db324d307e584ead2e7f275"
     },
     {
       "name": "ThsPlugin.Contracts.dll",
       "size": 101888,
-      "sha256": "f2f9ddce72d9ec5393b427e962b498bfd78b0f4cfdd58c65d142551b4d9199ac"
+      "sha256": "b1716cf84bf952f53ea25c021f153cbdfe7eff711f92358f373344b970a53f16"
     },
     {
       "name": "ThsPlugin.Plugin.deps.json",
       "size": 4394,
-      "sha256": "185578a8ff21088b16fb0495aa197ad4ef47c9361fc661b8244e0be4357cfc66"
+      "sha256": "0ac21a2990e0d928ceb9c537dc68fb471b7555508e3f503d78b8d9d41fd989e8"
     },
     {
       "name": "ThsPlugin.Plugin.dll",
-      "size": 4919296,
-      "sha256": "bbb3733f71cf2b725c4078236b364c79d7194340e0027859212dcb15fe6aeead"
+      "size": 4934656,
+      "sha256": "e39070554301bb908bcb5c1a57422fafabeab1ae0e91afce6cc9afa131e9761c"
     }
   ]
 }
