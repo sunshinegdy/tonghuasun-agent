@@ -38,6 +38,16 @@ tonghuaxun-agent/
   Build-Distribution.ps1
 ```
 
+## 构建发行包
+
+在 Windows PowerShell 中执行：
+
+```powershell
+.\Build-Distribution.ps1
+```
+
+构建完成后，`artifacts/` 中会生成 Codex、WorkBuddy 和 DeepSeek Harness 的安装包。
+
 ## 支持项目
 
 <p align="center">

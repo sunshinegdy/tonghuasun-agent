@@ -1,7 +1,6 @@
 # 发行产物与临时目录
 /artifacts/
 /.tmp/
-/tonghuasun-mcp/distribution/payload/
 
 # Node.js / TypeScript 生成物
 **/node_modules/
