@@ -165,7 +165,7 @@ function createStartupGuide(port: number): Record<string, unknown> {
       {
         name: "MCP",
         url: `http://127.0.0.1:${port}/mcp`,
-        usage: "供 Codex、WorkBuddy 和 DeepSeek Harness 加载并调用同花顺工具。"
+        usage: "供 Codex、Claude Code、WorkBuddy、ZCode 和 DeepSeek Harness 加载并调用同花顺工具。"
       },
       {
         name: "REST API",
