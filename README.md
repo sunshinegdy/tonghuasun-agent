@@ -2,6 +2,8 @@
 
 让 Codex、Claude Code、WorkBuddy 和 DeepSeek Harness 使用你电脑上的同花顺。
 
+所有功能均免费开放，不设订阅、会员、套餐、试用额度或付费解锁。
+
 ## 开始使用
 
 - [Codex 安装说明](./codex/README.md)

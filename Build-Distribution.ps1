@@ -27,7 +27,7 @@ function Assert-AdapterVersion([string]$ManifestPath, [string]$AdapterName) {
 
 Assert-AdapterVersion (Join-Path $agentRoot "codex\.codex-plugin\plugin.json") "Codex"
 Assert-AdapterVersion (Join-Path $agentRoot "claude-code\.claude-plugin\plugin.json") "Claude Code"
-Assert-AdapterVersion (Join-Path $agentRoot "workbuddy\plugin.json") "WorkBuddy"
+Assert-AdapterVersion (Join-Path $agentRoot "workbuddy\.codebuddy-plugin\plugin.json") "WorkBuddy"
 Assert-AdapterVersion (Join-Path $agentRoot "deepseek-harness\package.json") "DeepSeek Harness"
 
 Push-Location $toolingRoot
@@ -130,6 +130,57 @@ function Copy-CommonPackage([string]$DestinationPath) {
     Copy-ReleaseTree (Join-Path $coreRoot "legal") $DestinationPath
 }
 
+function Assert-NoLegacyCommercialState([string]$PackageRoot, [string]$AdapterName) {
+    $forbiddenNames = @("subscription-center.html", "entitlement.json", "account.dat")
+    $forbiddenMarkers = @(
+        "subscription_required",
+        "ths_subscription_status",
+        "ths_subscription_begin_link",
+        "ths_subscription_create_checkout",
+        "free_quota",
+        "commerceMode",
+        "subscriptionServiceBaseUrl",
+        "subscriptionExpiresAtUtc",
+        "canPurchase",
+        "monthlyFen",
+        "yearlyFen",
+        "entitlement",
+        "完整权益",
+        "基础版权益",
+        "月付",
+        "年付"
+    )
+
+    $packageFiles = @(Get-ChildItem -LiteralPath $PackageRoot -Recurse -File -Force)
+    $forbiddenFiles = @($packageFiles | Where-Object {
+        $_.Name -in $forbiddenNames -or $_.FullName -match "(^|\\)usage(\\|$)"
+    })
+    if ($forbiddenFiles.Count -gt 0) {
+        throw "$AdapterName 发行包包含旧版订阅状态文件：$($forbiddenFiles.FullName -join ', ')"
+    }
+
+    foreach ($file in $packageFiles) {
+        $bytes = [IO.File]::ReadAllBytes($file.FullName)
+        $utf8Text = [Text.Encoding]::UTF8.GetString($bytes)
+        $utf16EvenText = [Text.Encoding]::Unicode.GetString($bytes)
+        $utf16OddText = if ($bytes.Length -gt 1) {
+            [Text.Encoding]::Unicode.GetString($bytes, 1, $bytes.Length - 1)
+        }
+        else {
+            ""
+        }
+
+        foreach ($marker in $forbiddenMarkers) {
+            if ($utf8Text.IndexOf($marker, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+                $utf16EvenText.IndexOf($marker, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+                $utf16OddText.IndexOf($marker, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                $relativePath = $file.FullName.Substring($PackageRoot.Length).TrimStart("\")
+                throw "$AdapterName 发行包仍包含旧版订阅门禁标记 '$marker'：$relativePath"
+            }
+        }
+    }
+}
+
 function Assert-StagedPackage([string]$PackageRoot, [string]$AdapterName) {
     foreach ($relativePath in @(
         "payload\ths-plugin\ThsPlugin.Plugin.dll",
@@ -152,6 +203,8 @@ function Assert-StagedPackage([string]$PackageRoot, [string]$AdapterName) {
         throw "$AdapterName 发行包包含禁止文件：$($forbiddenFiles.FullName -join ', ')"
     }
 
+    Assert-NoLegacyCommercialState $PackageRoot $AdapterName
+
     $adapterConfigs = Get-ChildItem -LiteralPath $PackageRoot -File -Force |
         Where-Object { $_.Name -in @(".mcp.json", "mcp.json", "cordis.patch.yml") }
     foreach ($configFile in $adapterConfigs) {
@@ -162,8 +215,39 @@ function Assert-StagedPackage([string]$PackageRoot, [string]$AdapterName) {
     }
 }
 
+function Assert-WorkBuddyPackage([string]$PackageRoot) {
+    $manifestPath = Join-Path $PackageRoot ".codebuddy-plugin\plugin.json"
+    $mcpConfigPath = Join-Path $PackageRoot ".mcp.json"
+    foreach ($requiredPath in @($manifestPath, $mcpConfigPath)) {
+        if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+            throw "WorkBuddy 发行包缺少原生入口：$requiredPath"
+        }
+    }
+
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]$manifest.mcpServers -ne "./.mcp.json") {
+        throw "WorkBuddy 清单必须通过 ./.mcp.json 加载 MCP。"
+    }
+
+    $mcpConfigText = Get-Content -LiteralPath $mcpConfigPath -Raw -Encoding UTF8
+    if ($mcpConfigText -notmatch [regex]::Escape('${CODEBUDDY_PLUGIN_ROOT}')) {
+        throw "WorkBuddy MCP 配置必须使用 CODEBUDDY_PLUGIN_ROOT。"
+    }
+    if ($mcpConfigText -match [regex]::Escape('${PLUGIN_ROOT}') -or
+        $mcpConfigText -match [regex]::Escape('${CLAUDE_PLUGIN_ROOT}')) {
+        throw "WorkBuddy MCP 配置包含其他宿主的根目录变量。"
+    }
+
+    foreach ($forbiddenRelativePath in @("plugin.json", "mcp.json", ".claude-plugin", ".codex-plugin", "workbuddy")) {
+        if (Test-Path -LiteralPath (Join-Path $PackageRoot $forbiddenRelativePath)) {
+            throw "WorkBuddy 发行包包含错误或嵌套入口：$forbiddenRelativePath"
+        }
+    }
+}
+
 function Compress-Plugin([string]$SourceRoot, [string]$RootName, [string]$ArchiveName) {
-    $container = Join-Path (Split-Path -Parent $SourceRoot) ("archive-" + $RootName)
+    $archiveBaseName = [IO.Path]::GetFileNameWithoutExtension($ArchiveName)
+    $container = Join-Path (Split-Path -Parent $SourceRoot) ("archive-" + $archiveBaseName)
     New-Item -ItemType Directory -Path $container -Force | Out-Null
     $namedRoot = Join-Path $container $RootName
     Move-Item -LiteralPath $SourceRoot -Destination $namedRoot
@@ -173,6 +257,44 @@ function Compress-Plugin([string]$SourceRoot, [string]$RootName, [string]$Archiv
     }
     Compress-Archive -LiteralPath $namedRoot -DestinationPath $archivePath -CompressionLevel Optimal
     return $archivePath
+}
+
+function Assert-WorkBuddyArchive([string]$ArchivePath, [string]$RootName) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        $entries = @($archive.Entries | ForEach-Object { $_.FullName.Replace("\", "/") })
+        $requiredEntries = @(
+            "$RootName/.codebuddy-plugin/plugin.json",
+            "$RootName/.mcp.json"
+        )
+        foreach ($requiredEntry in $requiredEntries) {
+            if ($entries -cnotcontains $requiredEntry) {
+                throw "WorkBuddy ZIP 缺少原生入口：$requiredEntry"
+            }
+        }
+
+        $forbiddenPrefixes = @(
+            "$RootName/.claude-plugin/",
+            "$RootName/.codex-plugin/",
+            "$RootName/workbuddy/"
+        )
+        $forbiddenEntries = @(
+            "$RootName/plugin.json",
+            "$RootName/mcp.json"
+        )
+        $pollutedEntries = @($entries | Where-Object {
+            $entry = $_
+            $forbiddenEntries -ccontains $entry -or
+            @($forbiddenPrefixes | Where-Object { $entry.StartsWith($_, [StringComparison]::Ordinal) }).Count -gt 0
+        })
+        if ($pollutedEntries.Count -gt 0) {
+            throw "WorkBuddy ZIP 包含其他宿主或嵌套入口：$($pollutedEntries -join ', ')"
+        }
+    }
+    finally {
+        $archive.Dispose()
+    }
 }
 
 $temporaryRoot = Join-Path $temporaryBase ("distribution-" + $releaseVersion + "-" + $PID)
@@ -209,9 +331,13 @@ try {
     $workBuddyStage = Join-Path $resolvedTemporaryRoot "workbuddy"
     New-Item -ItemType Directory -Path $workBuddyStage -Force | Out-Null
     Copy-ReleaseTree (Join-Path $agentRoot "workbuddy") $workBuddyStage
+    Copy-Item -LiteralPath (Join-Path $agentRoot "workbuddy\.mcp.json") -Destination (Join-Path $workBuddyStage ".mcp.json")
     Copy-CommonPackage $workBuddyStage
     Assert-StagedPackage $workBuddyStage "WorkBuddy"
-    $builtArtifacts += Compress-Plugin $workBuddyStage "tonghuasun-agent" "tonghuasun-agent-workbuddy-$releaseVersion.zip"
+    Assert-WorkBuddyPackage $workBuddyStage
+    $workBuddyArtifact = Compress-Plugin $workBuddyStage "tonghuasun-agent" "tonghuasun-agent-workbuddy-$releaseVersion.zip"
+    Assert-WorkBuddyArchive $workBuddyArtifact "tonghuasun-agent"
+    $builtArtifacts += $workBuddyArtifact
 
     $dshStage = Join-Path $resolvedTemporaryRoot "deepseek-harness"
     New-Item -ItemType Directory -Path $dshStage -Force | Out-Null

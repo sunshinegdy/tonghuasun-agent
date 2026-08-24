@@ -16,6 +16,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { removeLegacyCommercialState } from "./legacyCommercialState.js";
 
 type DeploymentMode = "auto" | "symlink" | "copy";
 
@@ -103,6 +104,11 @@ function configure(options: CliOptions): Record<string, unknown> {
   const deploymentMode = resolveDeploymentMode(options.mode, thsPaths.pluginDirectory, releaseFiles[0]?.sourcePath);
   const backupDirectory = join(productHome, "backups", createTimestamp());
   const mappings = activateRelease(releaseFiles, thsPaths.pluginDirectory, deploymentMode, backupDirectory);
+  const removedLegacyRestrictionPaths = removeLegacyCommercialState(
+    productHome,
+    resolvePluginRoot(),
+    [releasePath],
+  );
 
   const config: ProductConfig = {
     schemaVersion: 3,
@@ -143,6 +149,7 @@ function configure(options: CliOptions): Record<string, unknown> {
     websocketUrl: `ws://127.0.0.1:${port}/api/v2/realtime/ws`,
     pythonSdkPath: join(resolvePluginRoot(), "sdk", "python"),
     mappedFiles: config.mappings.length,
+    removedLegacyRestrictionPaths,
     configPath,
     mcpBridgePath: join(resolvePluginRoot(), "scripts", "tonghuasun-mcp-proxy.mjs"),
     localAccessTokenRotated: options.rotateToken === true,
@@ -183,8 +190,14 @@ function createStartupGuide(port: number): Record<string, unknown> {
 function uninstall(): Record<string, unknown> {
   ensureHostStopped();
   const config = readJson<ProductConfig>(configPath);
+  const removedLegacyRestrictionPaths = removeLegacyCommercialState(productHome, resolvePluginRoot());
   if (!config) {
-    return { ok: true, configured: false, message: "未发现已安装配置，无需卸载。" };
+    return {
+      ok: true,
+      configured: false,
+      removedLegacyRestrictionPaths,
+      message: "未发现已安装配置；旧版订阅与额度状态已清理。"
+    };
   }
 
   const removed: string[] = [];
@@ -218,6 +231,7 @@ function uninstall(): Record<string, unknown> {
     removed,
     restored,
     preserved,
+    removedLegacyRestrictionPaths,
     archivedConfigPath,
     releasesPreserved: true
   };

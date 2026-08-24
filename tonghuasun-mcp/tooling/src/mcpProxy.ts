@@ -22,6 +22,10 @@ import {
   ToolListChangedNotificationSchema,
   UnsubscribeRequestSchema
 } from "@modelcontextprotocol/sdk/types.js";
+import {
+  appendStructuredContentTextFallback,
+  isStructuredContentTextCompatibilityEnabled
+} from "./toolResultCompatibility.js";
 
 type ProductConfig = {
   preferredPort?: number;
@@ -34,8 +38,11 @@ type RuntimeEndpoint = {
   port?: number;
 };
 
-const BRIDGE_VERSION = "0.2.2";
+const BRIDGE_VERSION = "0.2.4";
 const ACCESS_TOKEN_HEADER = "X-Tonghuasun-Codex-Token";
+const TEXT_COMPATIBILITY_ENABLED = isStructuredContentTextCompatibilityEnabled(
+  process.env.TONGHUASUN_MCP_TEXT_COMPATIBILITY
+);
 
 await main();
 
@@ -50,7 +57,9 @@ async function main(): Promise<void> {
     }
   });
 
-  await upstream.connect(upstreamTransport);
+  // SDK 1.28 的 Transport 接口与实现类在严格可选属性规则下存在类型偏差，
+  // 这里仅收窄到 Client.connect 的公开参数类型，不改变实际传输对象。
+  await upstream.connect(upstreamTransport as Parameters<Client["connect"]>[0]);
   const upstreamCapabilities = upstream.getServerCapabilities() ?? {};
   const downstream = new Server(
     { name: "tonghuasun-mcp", version: upstream.getServerVersion()?.version ?? BRIDGE_VERSION },
@@ -66,7 +75,7 @@ async function main(): Promise<void> {
     }
   );
 
-  registerForwarders(upstream, downstream, upstreamCapabilities);
+  registerForwarders(upstream, downstream, upstreamCapabilities, TEXT_COMPATIBILITY_ENABLED);
   registerNotifications(upstream, downstream);
 
   const stdio = new StdioServerTransport();
@@ -86,11 +95,15 @@ async function main(): Promise<void> {
 function registerForwarders(
   upstream: Client,
   downstream: Server,
-  capabilities: ReturnType<Client["getServerCapabilities"]>
+  capabilities: ReturnType<Client["getServerCapabilities"]>,
+  textCompatibilityEnabled: boolean
 ): void {
   if (capabilities?.tools) {
     downstream.setRequestHandler(ListToolsRequestSchema, (request) => upstream.listTools(request.params));
-    downstream.setRequestHandler(CallToolRequestSchema, (request) => upstream.callTool(request.params));
+    downstream.setRequestHandler(CallToolRequestSchema, async (request) => {
+      const result = await upstream.callTool(request.params);
+      return appendStructuredContentTextFallback(result, textCompatibilityEnabled);
+    });
   }
 
   if (capabilities?.resources) {

@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "releaseVersion": "0.2.3",
-  "generatedAtUtc": "2026-08-24T10:37:15.5677142Z",
+  "releaseVersion": "0.2.4",
+  "generatedAtUtc": "2026-08-24T13:55:06.3948763Z",
   "files": [
     {
       "name": "Microsoft.Extensions.Logging.Abstractions.dll",
