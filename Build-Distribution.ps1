@@ -29,6 +29,7 @@ Assert-AdapterVersion (Join-Path $agentRoot "codex\.codex-plugin\plugin.json") "
 Assert-AdapterVersion (Join-Path $agentRoot "claude-code\.claude-plugin\plugin.json") "Claude Code"
 Assert-AdapterVersion (Join-Path $agentRoot "workbuddy\.codebuddy-plugin\plugin.json") "WorkBuddy"
 Assert-AdapterVersion (Join-Path $agentRoot "zcode\.zcode-plugin\plugin.json") "ZCode"
+Assert-AdapterVersion (Join-Path $agentRoot "openclaw\plugin.json") "OpenClaw"
 Assert-AdapterVersion (Join-Path $agentRoot "deepseek-harness\package.json") "DeepSeek Harness"
 
 Push-Location $toolingRoot
@@ -280,6 +281,60 @@ function Assert-ZCodePackage([string]$PackageRoot) {
     }
 }
 
+function Assert-OpenClawPackage([string]$PackageRoot) {
+    $manifestPath = Join-Path $PackageRoot "plugin.json"
+    $mcpConfigPath = Join-Path $PackageRoot "mcp.json"
+    foreach ($requiredPath in @($manifestPath, $mcpConfigPath)) {
+        if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+            throw "OpenClaw 发行包缺少 Agent Plugins 入口：$requiredPath"
+        }
+    }
+
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]$manifest.'$schema' -ne "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json") {
+        throw "OpenClaw 插件清单必须使用 Agent Plugins 1.0.0 schema。"
+    }
+    if ([string]$manifest.name -ne "tonghuasun-agent") {
+        throw "OpenClaw 插件名称必须为 tonghuasun-agent。"
+    }
+
+    $mcpConfig = Get-Content -LiteralPath $mcpConfigPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]$mcpConfig.'$schema' -ne "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json") {
+        throw "OpenClaw MCP 清单必须使用 Agent Plugins 1.0.0 schema。"
+    }
+
+    $mcpServer = $mcpConfig.mcpServers.tonghuasun
+    if ($null -eq $mcpServer -or
+        [string]$mcpServer.type -ne "stdio" -or
+        [string]$mcpServer.command -ne "node" -or
+        [string]$mcpServer.cwd -ne '${PLUGIN_ROOT}' -or
+        @($mcpServer.args) -cnotcontains '${PLUGIN_ROOT}/scripts/tonghuasun-mcp-proxy.mjs') {
+        throw "OpenClaw MCP 清单未通过 PLUGIN_ROOT 正确加载同花顺代理。"
+    }
+
+    $mcpConfigText = Get-Content -LiteralPath $mcpConfigPath -Raw -Encoding UTF8
+    foreach ($foreignRoot in @('${CLAUDE_PLUGIN_ROOT}', '${CODEBUDDY_PLUGIN_ROOT}', '${CODEX_PLUGIN_ROOT}', '${ZCODE_PLUGIN_ROOT}')) {
+        if ($mcpConfigText -match [regex]::Escape($foreignRoot)) {
+            throw "OpenClaw MCP 配置包含其他宿主的根目录变量：$foreignRoot"
+        }
+    }
+
+    # OpenClaw 会按入口文件优先级判断插件格式；混入其他入口会导致本包不再按
+    # Agent Plugins 1.0.0 解析，因此这里进行严格隔离。
+    foreach ($forbiddenRelativePath in @(
+        "openclaw.plugin.json",
+        ".mcp.json",
+        ".codex-plugin",
+        ".claude-plugin",
+        ".codebuddy-plugin",
+        ".zcode-plugin"
+    )) {
+        if (Test-Path -LiteralPath (Join-Path $PackageRoot $forbiddenRelativePath)) {
+            throw "OpenClaw 发行包包含会改变格式识别结果的入口：$forbiddenRelativePath"
+        }
+    }
+}
+
 function Compress-Plugin([string]$SourceRoot, [string]$RootName, [string]$ArchiveName) {
     $archiveBaseName = [IO.Path]::GetFileNameWithoutExtension($ArchiveName)
     $container = Join-Path (Split-Path -Parent $SourceRoot) ("archive-" + $archiveBaseName)
@@ -355,6 +410,43 @@ function Assert-ZCodeArchive([string]$ArchivePath, [string]$RootName) {
         )) {
             if (@($entries | Where-Object { $_.StartsWith($forbiddenPrefix, [StringComparison]::Ordinal) }).Count -gt 0) {
                 throw "ZCode ZIP 包含其他宿主入口：$forbiddenPrefix"
+            }
+        }
+    }
+    finally {
+        $archive.Dispose()
+    }
+}
+
+function Assert-OpenClawArchive([string]$ArchivePath, [string]$RootName) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($ArchivePath)
+    try {
+        $entries = @($archive.Entries | ForEach-Object { $_.FullName.Replace("\", "/") })
+        foreach ($requiredEntry in @(
+            "$RootName/plugin.json",
+            "$RootName/mcp.json",
+            "$RootName/skills/configure-ths/SKILL.md",
+            "$RootName/scripts/tonghuasun-mcp-proxy.mjs"
+        )) {
+            if ($entries -cnotcontains $requiredEntry) {
+                throw "OpenClaw ZIP 缺少 Agent Plugins 入口或公共能力：$requiredEntry"
+            }
+        }
+
+        foreach ($forbiddenPrefix in @(
+            "$RootName/.codex-plugin/",
+            "$RootName/.claude-plugin/",
+            "$RootName/.codebuddy-plugin/",
+            "$RootName/.zcode-plugin/"
+        )) {
+            if (@($entries | Where-Object { $_.StartsWith($forbiddenPrefix, [StringComparison]::Ordinal) }).Count -gt 0) {
+                throw "OpenClaw ZIP 包含其他宿主入口：$forbiddenPrefix"
+            }
+        }
+        foreach ($forbiddenEntry in @("$RootName/openclaw.plugin.json", "$RootName/.mcp.json")) {
+            if ($entries -ccontains $forbiddenEntry) {
+                throw "OpenClaw ZIP 包含会改变格式识别结果的入口：$forbiddenEntry"
             }
         }
     }
@@ -501,6 +593,19 @@ try {
         "tonghuasun-agent-zcode-marketplace-$releaseVersion.zip"
     Assert-ZCodeMarketplaceArchive $zCodeMarketplaceArtifact "tonghuasun-agent-zcode-marketplace"
     $builtArtifacts += $zCodeMarketplaceArtifact
+
+    $openClawStage = Join-Path $resolvedTemporaryRoot "openclaw"
+    New-Item -ItemType Directory -Path $openClawStage -Force | Out-Null
+    Copy-ReleaseTree (Join-Path $agentRoot "openclaw") $openClawStage
+    Copy-CommonPackage $openClawStage
+    Assert-StagedPackage $openClawStage "OpenClaw"
+    Assert-OpenClawPackage $openClawStage
+    $openClawArtifact = Compress-Plugin `
+        $openClawStage `
+        "tonghuasun-agent" `
+        "tonghuasun-agent-openclaw-$releaseVersion.zip"
+    Assert-OpenClawArchive $openClawArtifact "tonghuasun-agent"
+    $builtArtifacts += $openClawArtifact
 
     $dshStage = Join-Path $resolvedTemporaryRoot "deepseek-harness"
     New-Item -ItemType Directory -Path $dshStage -Force | Out-Null

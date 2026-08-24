@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
-    "test": "npm run build && node --test tests/widgetAsset.test.mjs tests/toolResultCompatibility.test.mjs tests/workbuddyAdapter.test.mjs tests/zcodeAdapter.test.mjs tests/legacyCommercialState.test.mjs"
+    "test": "npm run build && node --test tests/widgetAsset.test.mjs tests/toolResultCompatibility.test.mjs tests/workbuddyAdapter.test.mjs tests/zcodeAdapter.test.mjs tests/openclawAdapter.test.mjs tests/legacyCommercialState.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.28.0",
