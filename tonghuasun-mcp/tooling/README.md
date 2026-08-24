@@ -16,6 +16,21 @@ npm test
 - `tonghuasun-mcp/distribution/scripts/`
 - `tonghuasun-mcp/distribution/ui/`
 
+## 安装和卸载预检
+
+安装前可以先查看客户端版本、文件冲突和部署计划，不会改动本机文件：
+
+```powershell
+node ..\distribution\scripts\configure.mjs configure --check --json
+```
+
+卸载前可以先查看将移除、恢复或保留的文件；需要保留旧版状态时追加
+`--keep-legacy-state`：
+
+```powershell
+node ..\distribution\scripts\configure.mjs uninstall --dry-run --keep-legacy-state --json
+```
+
 ## 端口和访问令牌
 
 配置器会把首选端口和随机生成的本机访问令牌保存在

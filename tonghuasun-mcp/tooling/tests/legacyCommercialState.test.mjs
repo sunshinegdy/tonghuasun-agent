@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { removeLegacyCommercialState } from "../dist/legacyCommercialState.js";
 
-test("升级时清除旧订阅状态和带门禁的历史 DLL", () => {
+test("升级时归档旧订阅状态并保留历史发布和插件缓存", () => {
   const root = mkdtempSync(join(tmpdir(), "tonghuasun-legacy-commercial-"));
   const productHome = join(root, "product");
   const pluginRoot = join(root, "plugins", "cache", "personal", "tonghuasun-codex", "0.2.4");
@@ -35,12 +35,20 @@ test("升级时清除旧订阅状态和带门禁的历史 DLL", () => {
     assert.equal(existsSync(join(productHome, "account.dat")), false);
     assert.equal(existsSync(join(productHome, "entitlement.json")), false);
     assert.equal(existsSync(join(productHome, "usage")), false);
-    assert.equal(existsSync(join(productHome, "releases", "0.2.1")), false);
-    assert.equal(existsSync(join(productHome, "backups", "legacy")), false);
-    assert.equal(existsSync(oldCache), false);
+    assert.equal(existsSync(join(productHome, "releases", "0.2.1")), true);
+    assert.equal(existsSync(join(productHome, "backups", "legacy")), true);
+    assert.equal(existsSync(oldCache), true);
     assert.equal(existsSync(cleanRelease), true);
     assert.equal(existsSync(pluginRoot), true);
-    assert.ok(removed.length >= 6);
+    assert.equal(removed.length, 3);
+    const archiveRoot = join(productHome, "legacy-state-backups");
+    const archiveVersions = readdirSync(archiveRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory());
+    assert.equal(archiveVersions.length, 1);
+    const archivedState = join(archiveRoot, archiveVersions[0].name);
+    assert.equal(existsSync(join(archivedState, "account.dat")), true);
+    assert.equal(existsSync(join(archivedState, "entitlement.json")), true);
+    assert.equal(existsSync(join(archivedState, "usage", "free.json")), true);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

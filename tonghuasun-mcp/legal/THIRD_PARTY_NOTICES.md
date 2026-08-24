@@ -9,10 +9,6 @@
 | TradingView fancy-canvas | 图表画布依赖 | MIT | https://github.com/tradingview/fancy-canvas |
 | esbuild | 前端与配置器构建 | MIT | https://github.com/evanw/esbuild |
 | TypeScript | TypeScript 编译器 | Apache-2.0 | https://github.com/microsoft/TypeScript |
-| node-postgres (`pg`) | PostgreSQL 客户端 | MIT | https://github.com/brianc/node-postgres |
-| Npgsql 7.0.7 | 原生组件的 PostgreSQL 客户端 | PostgreSQL | https://github.com/npgsql/npgsql |
-| Microsoft.Extensions.Logging.Abstractions 6.0.0 | 日志抽象 | MIT | https://github.com/dotnet/runtime |
-| System.Runtime.CompilerServices.Unsafe 6.0.0 | .NET 运行支持 | MIT | https://github.com/dotnet/runtime |
 
 Node.js 与 Python 的完整传递依赖及版本以各模块锁文件为准。官方发行流水线应生成
 依赖物料清单，并把实际随包分发组件的许可证文本一并归档。

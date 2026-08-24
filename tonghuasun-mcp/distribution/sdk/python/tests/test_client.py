@@ -62,6 +62,20 @@ class ClientTests(unittest.TestCase):
         self.assertEqual(context.exception.code, "not_ready")
         self.assertEqual(context.exception.trace_id, "trace-1")
 
+    @patch("tonghuasun_codex.client.urlopen")
+    def test_subscription_only_sends_realtime_subscription_fields(self, urlopen) -> None:
+        urlopen.return_value = FakeResponse({"ok": True, "data": {"subscriptionId": "sub-1"}})
+
+        self.client.create_subscription("601727.SH", fields=["latest"])
+
+        request = urlopen.call_args.args[0]
+        payload = json.loads(request.data)
+        self.assertEqual(payload["codes"], ["601727.SH"])
+        self.assertEqual(payload["fields"], ["latest"])
+        self.assertNotIn("capture", payload)
+        self.assertNotIn("captureTtlSeconds", payload)
+        self.assertNotIn("ttlSeconds", payload)
+
     def test_records_flattens_series_points_for_quant_analysis(self) -> None:
         records = Client.records(
             {

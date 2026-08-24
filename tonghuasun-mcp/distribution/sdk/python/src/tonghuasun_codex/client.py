@@ -405,7 +405,6 @@ class Client:
         kind: int = 1,
         market: Market = 1,
         fields: Sequence[str] | None = None,
-        ttl_seconds: int = 1_800,
     ) -> dict[str, Any]:
         return self.request(
             "POST",
@@ -415,8 +414,6 @@ class Client:
                 "market": market,
                 "codes": _codes(codes),
                 "fields": list(fields or []),
-                "capture": False,
-                "ttlSeconds": ttl_seconds,
             },
         )
 

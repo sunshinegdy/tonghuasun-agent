@@ -16,6 +16,12 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  canManageDestination,
+  createDeploymentPlan,
+  createRetirementPlan,
+  type DeploymentPlanItem,
+} from "./deploymentSafety.js";
 import { removeLegacyCommercialState } from "./legacyCommercialState.js";
 
 type DeploymentMode = "auto" | "symlink" | "copy";
@@ -27,6 +33,21 @@ type MappingRecord = {
   sha256: string;
   mode: "symlink" | "copy";
   backupPath?: string;
+};
+
+type PreviousDestination =
+  | { kind: "file"; backupPath: string }
+  | { kind: "symlink"; linkTarget: string };
+
+type ActivatedMapping = {
+  mapping: MappingRecord;
+  previous?: PreviousDestination;
+};
+
+type ActivationResult = {
+  mappings: MappingRecord[];
+  removedRetiredPaths: string[];
+  preservedRetiredPaths: string[];
 };
 
 type ProductConfig = {
@@ -57,9 +78,22 @@ type CliOptions = {
   enableTradeTools?: boolean;
   enableAutomatedTradeApi?: boolean;
   rotateToken?: boolean;
+  force: boolean;
+  dryRun: boolean;
+  keepLegacyState: boolean;
   mode: DeploymentMode;
   json: boolean;
 };
+
+class ConfigurationError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ConfigurationError";
+  }
+}
 
 const productHome = resolveProductHome();
 const configPath = join(productHome, "config.json");
@@ -68,47 +102,98 @@ const endpointPath = join(productHome, "runtime", "endpoint.json");
 main();
 
 function main(): void {
+  let json = process.argv.includes("--json");
   try {
     const options = parseArguments(process.argv.slice(2));
+    json = options.json;
     if (options.command === "status") {
       printResult(readStatus(), options.json);
       return;
     }
 
     if (options.command === "uninstall") {
-      printResult(uninstall(), options.json);
+      printResult(uninstall(options), options.json);
       return;
     }
 
     printResult(configure(options), options.json);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`同花顺 Agent 配置失败：${message}`);
+    const code = error instanceof ConfigurationError ? error.code : "configuration_failed";
+    if (json) {
+      console.log(JSON.stringify({ ok: false, error: { code, message } }, null, 2));
+    } else {
+      console.error(`同花顺 Agent 配置失败 [${code}]：${message}`);
+    }
     process.exitCode = 1;
   }
 }
 
 function configure(options: CliOptions): Record<string, unknown> {
-  ensureHostStopped();
   const existingConfig = readJson<ProductConfig>(configPath);
   const thsPaths = resolveThsPaths(options.thsPath ?? existingConfig?.thsInstallPath);
   const port = validatePort(options.port ?? existingConfig?.preferredPort ?? 17180);
   const version = options.version?.trim() || resolvePackagedVersion();
   const payloadPath = resolve(options.payloadPath ?? join(resolvePluginRoot(), "payload", "ths-plugin"));
   validatePayload(payloadPath);
+  const hostCompatibility = readHostCompatibility(thsPaths.binPath);
+  const payloadFiles = listPayloadFiles(payloadPath);
+  const deploymentPlan = createDeploymentPlan(
+    payloadFiles,
+    thsPaths.pluginDirectory,
+    existingConfig?.mappings ?? [],
+  );
+  const retirementPlan = createRetirementPlan(
+    payloadFiles,
+    thsPaths.pluginDirectory,
+    existingConfig?.mappings ?? [],
+  );
+  const conflicts = deploymentPlan.filter((item) => item.action === "conflict");
+
+  if (options.dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      hostRunning: isHostRunning(),
+      thsInstallPath: thsPaths.installPath,
+      pluginDirectory: thsPaths.pluginDirectory,
+      releaseVersion: version,
+      hostCompatibility,
+      requestedMode: options.mode,
+      force: options.force,
+      hasConflicts: conflicts.length > 0,
+      deploymentPlan,
+      retirementPlan,
+      nextAction: conflicts.length > 0 && !options.force
+        ? "发现非本安装器管理的同名文件；确认文件归属后才能使用 --force 覆盖。"
+        : "预检通过；退出同花顺后移除 --dry-run 即可执行配置。",
+    };
+  }
+
+  if (conflicts.length > 0 && !options.force) {
+    throw new Error(formatDeploymentConflictMessage(conflicts));
+  }
+
+  ensureHostStopped();
   ensureHttpUrlAcl(port);
 
   const releasePath = join(productHome, "releases", sanitizePathSegment(version), "ths-plugin");
   mkdirSync(releasePath, { recursive: true });
-  const releaseFiles = copyPayload(payloadPath, releasePath);
+  removeRetiredReleaseFiles(payloadFiles, releasePath);
+  const releaseFiles = copyPayload(payloadFiles, releasePath);
   const deploymentMode = resolveDeploymentMode(options.mode, thsPaths.pluginDirectory, releaseFiles[0]?.sourcePath);
   const backupDirectory = join(productHome, "backups", createTimestamp());
-  const mappings = activateRelease(releaseFiles, thsPaths.pluginDirectory, deploymentMode, backupDirectory);
-  const removedLegacyRestrictionPaths = removeLegacyCommercialState(
-    productHome,
-    resolvePluginRoot(),
-    [releasePath],
+  const activation = activateRelease(
+    releaseFiles,
+    thsPaths.pluginDirectory,
+    deploymentMode,
+    backupDirectory,
+    existingConfig?.mappings ?? [],
+    options.force,
   );
+  const removedLegacyRestrictionPaths = options.keepLegacyState
+    ? []
+    : removeLegacyCommercialState(productHome, resolvePluginRoot(), [releasePath]);
 
   const config: ProductConfig = {
     schemaVersion: 3,
@@ -125,7 +210,7 @@ function configure(options: CliOptions): Record<string, unknown> {
     releaseVersion: version,
     activeReleasePath: releasePath,
     deploymentMode,
-    mappings,
+    mappings: activation.mappings,
     updatedAtUtc: new Date().toISOString()
   };
 
@@ -137,6 +222,7 @@ function configure(options: CliOptions): Record<string, unknown> {
     thsInstallPath: config.thsInstallPath,
     pluginDirectory: config.pluginDirectory,
     releaseVersion: config.releaseVersion,
+    hostCompatibility,
     activeReleasePath: config.activeReleasePath,
     deploymentMode: config.deploymentMode,
     preferredPort: config.preferredPort,
@@ -149,10 +235,14 @@ function configure(options: CliOptions): Record<string, unknown> {
     websocketUrl: `ws://127.0.0.1:${port}/api/v2/realtime/ws`,
     pythonSdkPath: join(resolvePluginRoot(), "sdk", "python"),
     mappedFiles: config.mappings.length,
+    removedRetiredPaths: activation.removedRetiredPaths,
+    preservedRetiredPaths: activation.preservedRetiredPaths,
     removedLegacyRestrictionPaths,
     configPath,
     mcpBridgePath: join(resolvePluginRoot(), "scripts", "tonghuasun-mcp-proxy.mjs"),
     localAccessTokenRotated: options.rotateToken === true,
+    forcedOverwrite: options.force,
+    legacyStatePreserved: options.keepLegacyState,
     startupGuide: createStartupGuide(port),
     nextAction: "请启动同花顺，并重启当前 Agent 宿主或新建任务以重新加载 MCP。"
   };
@@ -187,16 +277,32 @@ function createStartupGuide(port: number): Record<string, unknown> {
   };
 }
 
-function uninstall(): Record<string, unknown> {
-  ensureHostStopped();
+function uninstall(options: CliOptions): Record<string, unknown> {
   const config = readJson<ProductConfig>(configPath);
-  const removedLegacyRestrictionPaths = removeLegacyCommercialState(productHome, resolvePluginRoot());
+  const plan = createUninstallPlan(config);
+  if (options.dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      configured: !!config,
+      hostRunning: isHostRunning(),
+      legacyStatePreserved: options.keepLegacyState,
+      ...plan,
+      nextAction: "预检完成；确认清单后移除 --dry-run 即可卸载。",
+    };
+  }
+
+  ensureHostStopped();
+  const removedLegacyRestrictionPaths = options.keepLegacyState
+    ? []
+    : removeLegacyCommercialState(productHome, resolvePluginRoot());
   if (!config) {
     return {
       ok: true,
       configured: false,
       removedLegacyRestrictionPaths,
-      message: "未发现已安装配置；旧版订阅与额度状态已清理。"
+      legacyStatePreserved: options.keepLegacyState,
+      message: "未发现已安装配置。"
     };
   }
 
@@ -205,10 +311,10 @@ function uninstall(): Record<string, unknown> {
   const restored: string[] = [];
 
   for (const mapping of config.mappings ?? []) {
-    if (canRemoveManagedDestination(mapping)) {
+    if (canManageDestination(mapping)) {
       unlinkSync(mapping.destinationPath);
       removed.push(mapping.destinationPath);
-    } else if (existsSync(mapping.destinationPath)) {
+    } else if (existsSync(mapping.destinationPath) || isSymbolicLink(mapping.destinationPath)) {
       preserved.push(mapping.destinationPath);
       continue;
     }
@@ -232,8 +338,37 @@ function uninstall(): Record<string, unknown> {
     restored,
     preserved,
     removedLegacyRestrictionPaths,
+    legacyStatePreserved: options.keepLegacyState,
     archivedConfigPath,
     releasesPreserved: true
+  };
+}
+
+function createUninstallPlan(config: ProductConfig | null): Record<string, unknown> {
+  const wouldRemove: string[] = [];
+  const wouldRestore: string[] = [];
+  const wouldPreserve: string[] = [];
+
+  for (const mapping of config?.mappings ?? []) {
+    const managed = canManageDestination(mapping);
+    if (managed) {
+      wouldRemove.push(mapping.destinationPath);
+    } else if (existsSync(mapping.destinationPath) || isSymbolicLink(mapping.destinationPath)) {
+      wouldPreserve.push(mapping.destinationPath);
+      continue;
+    }
+
+    if (mapping.backupPath && existsSync(mapping.backupPath)) {
+      wouldRestore.push(mapping.destinationPath);
+    }
+  }
+
+  return {
+    wouldRemove,
+    wouldRestore,
+    wouldPreserve,
+    wouldArchiveConfig: config ? join(productHome, "config.uninstalled-<时间>.json") : null,
+    releasesPreserved: true,
   };
 }
 
@@ -272,6 +407,7 @@ function readStatus(): Record<string, unknown> {
         }
       : null,
     endpoint,
+    hostCompatibility: config ? readHostCompatibility(config.thsBinPath) : null,
     startupGuide: config ? createStartupGuide(config.preferredPort) : null,
     mappings,
     healthyMappings: mappings.filter((item) => item.healthy).length,
@@ -283,17 +419,23 @@ function activateRelease(
   releaseFiles: Array<{ fileName: string; sourcePath: string; sha256: string }>,
   pluginDirectory: string,
   mode: "symlink" | "copy",
-  backupDirectory: string
-): MappingRecord[] {
+  backupDirectory: string,
+  existingMappings: readonly MappingRecord[],
+  force: boolean,
+): ActivationResult {
   mkdirSync(pluginDirectory, { recursive: true });
-  const mappings: MappingRecord[] = [];
+  const activatedMappings: ActivatedMapping[] = [];
+  const retiredMappings: ActivatedMapping[] = [];
+  const removedRetiredPaths: string[] = [];
+  const preservedRetiredPaths: string[] = [];
 
   for (const file of releaseFiles) {
     const destinationPath = join(pluginDirectory, file.fileName);
-    let backupPath: string | undefined;
+    let previous: PreviousDestination | undefined;
     try {
       if (existsSync(destinationPath) || isSymbolicLink(destinationPath)) {
-        backupPath = backupExistingFile(destinationPath, backupDirectory);
+        assertDestinationCanBeReplaced(destinationPath, existingMappings, force);
+        previous = backupExistingDestination(destinationPath, backupDirectory);
         unlinkSync(destinationPath);
       }
 
@@ -303,36 +445,84 @@ function activateRelease(
         copyFileSync(file.sourcePath, destinationPath);
       }
 
-      mappings.push({
+      const mapping: MappingRecord = {
         fileName: file.fileName,
         sourcePath: file.sourcePath,
         destinationPath,
         sha256: file.sha256,
         mode,
-        ...(backupPath ? { backupPath } : {})
-      });
+        ...(previous?.kind === "file" ? { backupPath: previous.backupPath } : {})
+      };
+      activatedMappings.push({ mapping, ...(previous ? { previous } : {}) });
     } catch (error) {
       // 激活必须具备事务性，避免安装中断后把 PluginSdks 留在半新半旧状态。
       removeFileIfPresent(destinationPath);
-      restoreBackup(backupPath, destinationPath);
-      rollbackMappings(mappings);
+      restorePreviousDestination(previous, destinationPath);
+      rollbackMappings(activatedMappings);
       throw error;
     }
   }
 
-  return mappings;
+  const activeDestinations = new Set(
+    releaseFiles.map((file) => normalizePath(join(pluginDirectory, file.fileName))),
+  );
+  try {
+    for (const mapping of existingMappings) {
+      if (activeDestinations.has(normalizePath(mapping.destinationPath))) {
+        continue;
+      }
+      if (!existsSync(mapping.destinationPath) && !isSymbolicLink(mapping.destinationPath)) {
+        continue;
+      }
+      if (!canManageDestination(mapping)) {
+        preservedRetiredPaths.push(mapping.destinationPath);
+        continue;
+      }
+
+      const previous = backupExistingDestination(mapping.destinationPath, backupDirectory);
+      unlinkSync(mapping.destinationPath);
+      retiredMappings.push({ mapping, previous });
+      removedRetiredPaths.push(mapping.destinationPath);
+    }
+  } catch (error) {
+    // 旧文件清理也是升级事务的一部分；失败时恢复旧文件和本轮已替换的文件。
+    rollbackMappings(retiredMappings);
+    rollbackMappings(activatedMappings);
+    throw error;
+  }
+
+  return {
+    mappings: activatedMappings.map((item) => item.mapping),
+    removedRetiredPaths,
+    preservedRetiredPaths,
+  };
 }
 
-function rollbackMappings(mappings: MappingRecord[]): void {
-  for (const mapping of [...mappings].reverse()) {
-    removeFileIfPresent(mapping.destinationPath);
-    restoreBackup(mapping.backupPath, mapping.destinationPath);
+function removeRetiredReleaseFiles(
+  payloadFiles: readonly { fileName: string }[],
+  releasePath: string,
+): void {
+  const activeNames = new Set(payloadFiles.map((file) => file.fileName.toLowerCase()));
+  for (const entry of readdirSync(releasePath, { withFileTypes: true })) {
+    if ((!entry.isFile() && !entry.isSymbolicLink()) || activeNames.has(entry.name.toLowerCase())) {
+      continue;
+    }
+    rmSync(join(releasePath, entry.name), { force: true });
   }
 }
 
-function restoreBackup(backupPath: string | undefined, destinationPath: string): void {
-  if (backupPath && existsSync(backupPath)) {
-    copyFileSync(backupPath, destinationPath);
+function rollbackMappings(activatedMappings: ActivatedMapping[]): void {
+  for (const item of [...activatedMappings].reverse()) {
+    removeFileIfPresent(item.mapping.destinationPath);
+    restorePreviousDestination(item.previous, item.mapping.destinationPath);
+  }
+}
+
+function restorePreviousDestination(previous: PreviousDestination | undefined, destinationPath: string): void {
+  if (previous?.kind === "file" && existsSync(previous.backupPath)) {
+    copyFileSync(previous.backupPath, destinationPath);
+  } else if (previous?.kind === "symlink") {
+    symlinkSync(previous.linkTarget, destinationPath, "file");
   }
 }
 
@@ -342,15 +532,37 @@ function removeFileIfPresent(filePath: string): void {
   }
 }
 
-function backupExistingFile(destinationPath: string, backupDirectory: string): string | undefined {
+function backupExistingDestination(
+  destinationPath: string,
+  backupDirectory: string,
+): PreviousDestination {
   if (isSymbolicLink(destinationPath)) {
-    return undefined;
+    return { kind: "symlink", linkTarget: readlinkSync(destinationPath) };
   }
 
   mkdirSync(backupDirectory, { recursive: true });
   const backupPath = join(backupDirectory, destinationPath.split(/[\\/]/).pop() ?? "unknown-file");
   copyFileSync(destinationPath, backupPath);
-  return backupPath;
+  return { kind: "file", backupPath };
+}
+
+function assertDestinationCanBeReplaced(
+  destinationPath: string,
+  existingMappings: readonly MappingRecord[],
+  force: boolean,
+): void {
+  if (force) return;
+
+  const normalizedDestination = normalizePath(destinationPath);
+  const mapping = existingMappings.find(
+    (item) => normalizePath(item.destinationPath) === normalizedDestination,
+  );
+  if (!mapping || !canManageDestination(mapping)) {
+    throw new Error(
+      `拒绝覆盖不属于当前安装配置或已被修改的文件：${destinationPath}。` +
+      "确认文件归属后，可显式使用 --force。",
+    );
+  }
 }
 
 function resolveDeploymentMode(
@@ -387,18 +599,32 @@ function resolveDeploymentMode(
   }
 }
 
-function copyPayload(
+function listPayloadFiles(
   payloadPath: string,
-  releasePath: string
 ): Array<{ fileName: string; sourcePath: string; sha256: string }> {
   return readdirSync(payloadPath, { withFileTypes: true })
     .filter((entry) => entry.isFile())
     .map((entry) => {
       const sourcePath = join(payloadPath, entry.name);
-      const releaseFilePath = join(releasePath, entry.name);
-      copyFileSync(sourcePath, releaseFilePath);
       return {
         fileName: entry.name,
+        sourcePath,
+        sha256: hashFile(sourcePath),
+      };
+    })
+    .sort((left, right) => left.fileName.localeCompare(right.fileName));
+}
+
+function copyPayload(
+  payloadFiles: ReadonlyArray<{ fileName: string; sourcePath: string; sha256: string }>,
+  releasePath: string
+): Array<{ fileName: string; sourcePath: string; sha256: string }> {
+  return payloadFiles
+    .map((file) => {
+      const releaseFilePath = join(releasePath, file.fileName);
+      copyFileSync(file.sourcePath, releaseFilePath);
+      return {
+        fileName: file.fileName,
         sourcePath: releaseFilePath,
         sha256: hashFile(releaseFilePath)
       };
@@ -424,7 +650,52 @@ function resolveThsPaths(inputPath: string | undefined): {
     }
   }
 
-  throw new Error("没有找到同花顺 happ.exe。请使用 --ths-path 指定同花顺安装目录。 ");
+  throw new ConfigurationError(
+    "client_not_found",
+    "没有找到同花顺 happ.exe。请使用 --ths-path 指定同花顺安装目录。",
+  );
+}
+
+function readHostCompatibility(binPath: string): Record<string, unknown> {
+  const executablePath = join(binPath, "happ.exe");
+  if (!existsSync(executablePath)) {
+    return {
+      recognized: false,
+      code: "client_not_found",
+      executablePath,
+      reason: "未找到 happ.exe",
+    };
+  }
+
+  const escapedPath = executablePath.replace(/'/g, "''");
+  const command = [
+    `$version = (Get-Item -LiteralPath '${escapedPath}').VersionInfo`,
+    `[pscustomobject]@{ fileVersion = $version.FileVersion; productVersion = $version.ProductVersion; productName = $version.ProductName; fileDescription = $version.FileDescription } | ConvertTo-Json -Compress`,
+  ].join("; ");
+  try {
+    const output = execFileSync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", command],
+      { encoding: "utf8", windowsHide: true, timeout: 5_000 },
+    );
+    const versionInfo = JSON.parse(output) as Record<string, unknown>;
+    const recognized = versionInfo.productName === "Hevo.App" || versionInfo.fileDescription === "happ";
+    return {
+      recognized,
+      code: recognized ? "supported_client" : "unsupported_client",
+      supportedClient: "同花顺远航版",
+      executablePath,
+      ...versionInfo,
+      ...(recognized ? {} : { reason: "检测到 happ.exe，但无法确认是否为已验证的同花顺远航版客户端" }),
+    };
+  } catch (error) {
+    return {
+      recognized: false,
+      code: "client_version_unreadable",
+      executablePath,
+      reason: `无法读取客户端版本信息。${formatErrorCode(error)}`,
+    };
+  }
 }
 
 function detectThsCandidates(): string[] {
@@ -445,7 +716,10 @@ function detectThsCandidates(): string[] {
 
 function validatePayload(payloadPath: string): void {
   if (!existsSync(join(payloadPath, "ThsPlugin.Plugin.dll"))) {
-    throw new Error(`插件产物不完整：${payloadPath} 中缺少 ThsPlugin.Plugin.dll。`);
+    throw new ConfigurationError(
+      "invalid_payload",
+      `插件产物不完整：${payloadPath} 中缺少 ThsPlugin.Plugin.dll。`,
+    );
   }
 }
 
@@ -544,24 +818,8 @@ function ensureHostStopped(): void {
   }
 }
 
-function canRemoveManagedDestination(mapping: MappingRecord): boolean {
-  if (!existsSync(mapping.destinationPath) && !isSymbolicLink(mapping.destinationPath)) {
-    return false;
-  }
-
-  if (isSymbolicLink(mapping.destinationPath)) {
-    try {
-      return resolve(dirname(mapping.destinationPath), readlinkSync(mapping.destinationPath)) === resolve(mapping.sourcePath);
-    } catch {
-      return false;
-    }
-  }
-
-  return mapping.mode === "copy" && hashFile(mapping.destinationPath) === mapping.sha256;
-}
-
 function isMappingHealthy(mapping: MappingRecord): boolean {
-  return canRemoveManagedDestination(mapping);
+  return canManageDestination(mapping);
 }
 
 function isSymbolicLink(filePath: string): boolean {
@@ -590,23 +848,68 @@ function readJson<T>(filePath: string): T | null {
 function writeJsonAtomic(filePath: string, value: unknown): void {
   mkdirSync(dirname(filePath), { recursive: true });
   const temporaryPath = `${filePath}.${process.pid}.tmp`;
+  const previousPath = `${filePath}.${process.pid}.previous`;
   writeFileSync(temporaryPath, JSON.stringify(value, null, 2), "utf8");
-  if (existsSync(filePath)) {
-    rmSync(filePath, { force: true });
+  hardenPrivateFileAcl(temporaryPath);
+  try {
+    if (existsSync(filePath)) {
+      renameSync(filePath, previousPath);
+    }
+    renameSync(temporaryPath, filePath);
+    if (existsSync(previousPath)) {
+      rmSync(previousPath, { force: true });
+    }
+  } catch (error) {
+    if (!existsSync(filePath) && existsSync(previousPath)) {
+      renameSync(previousPath, filePath);
+    }
+    if (existsSync(temporaryPath)) {
+      rmSync(temporaryPath, { force: true });
+    }
+    throw error;
   }
-  renameSync(temporaryPath, filePath);
+}
+
+function hardenPrivateFileAcl(filePath: string): void {
+  if (process.platform !== "win32") return;
+
+  const userSid = execFileSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
+    ],
+    { encoding: "utf8", windowsHide: true },
+  ).trim();
+  execFileSync(
+    "icacls.exe",
+    [
+      filePath,
+      "/inheritance:r",
+      "/grant:r",
+      `*${userSid}:(F)`,
+      "*S-1-5-18:(F)",
+      "*S-1-5-32-544:(F)",
+    ],
+    { stdio: "ignore", windowsHide: true },
+  );
 }
 
 function parseArguments(args: string[]): CliOptions {
   const first = args[0]?.toLowerCase();
   const command = first && !first.startsWith("--") ? first : "configure";
   if (!(["configure", "repair", "status", "uninstall"] as string[]).includes(command)) {
-    throw new Error(`未知命令：${command}`);
+    throw new ConfigurationError("invalid_arguments", `未知命令：${command}`);
   }
 
   const values = first && !first.startsWith("--") ? args.slice(1) : args;
   const options: CliOptions = {
     command: command as CliOptions["command"],
+    force: false,
+    dryRun: false,
+    keepLegacyState: false,
     mode: "auto",
     json: false
   };
@@ -619,6 +922,18 @@ function parseArguments(args: string[]): CliOptions {
     }
     if (name === "--rotate-token") {
       options.rotateToken = true;
+      continue;
+    }
+    if (name === "--force") {
+      options.force = true;
+      continue;
+    }
+    if (name === "--dry-run" || name === "--check") {
+      options.dryRun = true;
+      continue;
+    }
+    if (name === "--keep-legacy-state") {
+      options.keepLegacyState = true;
       continue;
     }
 
@@ -659,7 +974,7 @@ function parseArguments(args: string[]): CliOptions {
         options.mode = value as DeploymentMode;
         break;
       default:
-        throw new Error(`未知参数：${name}`);
+        throw new ConfigurationError("invalid_arguments", `未知参数：${name}`);
     }
   }
 
@@ -668,7 +983,7 @@ function parseArguments(args: string[]): CliOptions {
 
 function validatePort(port: number): number {
   if (!Number.isInteger(port) || port < 1024 || port > 65535) {
-    throw new Error(`端口无效：${port}`);
+    throw new ConfigurationError("invalid_port", `端口无效：${port}`);
   }
   return port;
 }
@@ -686,6 +1001,19 @@ function createTimestamp(): string {
 
 function sanitizePathSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9._+-]/g, "-");
+}
+
+function formatDeploymentConflictMessage(conflicts: readonly DeploymentPlanItem[]): string {
+  const details = conflicts
+    .map((item) => `${item.fileName}（${item.reason}）`)
+    .join("、");
+  return `检测到可能属于其他插件或已被修改的同名文件：${details}。` +
+    "安装器未覆盖任何文件；确认文件归属后，可显式使用 --force。";
+}
+
+function normalizePath(filePath: string): string {
+  const normalized = resolve(filePath);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
 }
 
 function expandEnvironmentVariables(value: string): string {

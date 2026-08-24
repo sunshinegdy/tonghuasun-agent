@@ -49,11 +49,14 @@ async def main():
     async for event in client.stream(
         ["601727.SH"],
         kind="level2_trade",
-        fields=["*"],
+        fields=["price", "volume", "tradeTime", "side"],
     ):
         print(event)
 
 asyncio.run(main())
 ```
 
-`capture` 默认关闭。只有明确需要插件异步写入 PostgreSQL 时才应主动开启。
+SDK 中的 `create_subscription`、`poll_subscription` 和 `cancel_subscription` 指实时数据订阅，
+不是会员、套餐或付费订阅。
+
+插件只负责返回实时订阅数据；如需保存、计算或转发，请在自己的程序中处理。

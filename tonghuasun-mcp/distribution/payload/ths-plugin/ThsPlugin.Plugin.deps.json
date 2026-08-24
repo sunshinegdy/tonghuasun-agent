@@ -6,7 +6,7 @@
   "compilationOptions": {},
   "targets": {
     ".NETCoreApp,Version=v5.0": {
-      "ThsPlugin.Plugin/0.2.5": {
+      "ThsPlugin.Plugin/0.2.2": {
         "dependencies": {
           "ThsPlugin.Abstractions": "1.0.0",
           "ThsPlugin.Adapters.Hevo": "1.0.0",
@@ -15,34 +15,6 @@
         },
         "runtime": {
           "ThsPlugin.Plugin.dll": {}
-        }
-      },
-      "Microsoft.Extensions.Logging.Abstractions/6.0.0": {
-        "runtime": {
-          "lib/netstandard2.0/Microsoft.Extensions.Logging.Abstractions.dll": {
-            "assemblyVersion": "6.0.0.0",
-            "fileVersion": "6.0.21.52210"
-          }
-        }
-      },
-      "Npgsql/7.0.7": {
-        "dependencies": {
-          "Microsoft.Extensions.Logging.Abstractions": "6.0.0",
-          "System.Runtime.CompilerServices.Unsafe": "6.0.0"
-        },
-        "runtime": {
-          "lib/net5.0/Npgsql.dll": {
-            "assemblyVersion": "7.0.7.0",
-            "fileVersion": "7.0.7.0"
-          }
-        }
-      },
-      "System.Runtime.CompilerServices.Unsafe/6.0.0": {
-        "runtime": {
-          "lib/netcoreapp3.1/System.Runtime.CompilerServices.Unsafe.dll": {
-            "assemblyVersion": "6.0.0.0",
-            "fileVersion": "6.0.21.52210"
-          }
         }
       },
       "ThsPlugin.Abstractions/1.0.0": {
@@ -58,7 +30,6 @@
       },
       "ThsPlugin.Adapters.Hevo/1.0.0": {
         "dependencies": {
-          "Npgsql": "7.0.7",
           "ThsPlugin.Abstractions": "1.0.0",
           "ThsPlugin.Application": "1.0.0",
           "ThsPlugin.Contracts": "1.0.0"
@@ -93,31 +64,10 @@
     }
   },
   "libraries": {
-    "ThsPlugin.Plugin/0.2.5": {
+    "ThsPlugin.Plugin/0.2.2": {
       "type": "project",
       "serviceable": false,
       "sha512": ""
-    },
-    "Microsoft.Extensions.Logging.Abstractions/6.0.0": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-/HggWBbTwy8TgebGSX5DBZ24ndhzi93sHUBDvP1IxbZD7FDokYzdAr6+vbWGjw2XAfR2EJ1sfKUotpjHnFWPxA==",
-      "path": "microsoft.extensions.logging.abstractions/6.0.0",
-      "hashPath": "microsoft.extensions.logging.abstractions.6.0.0.nupkg.sha512"
-    },
-    "Npgsql/7.0.7": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-A3BjyNebHjw/MahM6n3VnKbxrj/hQnMROEkUNUTjhUVv7yvcGnfBgw/FszahT9uCR23AVD2N/0Tvw1aHgxr9Gg==",
-      "path": "npgsql/7.0.7",
-      "hashPath": "npgsql.7.0.7.nupkg.sha512"
-    },
-    "System.Runtime.CompilerServices.Unsafe/6.0.0": {
-      "type": "package",
-      "serviceable": true,
-      "sha512": "sha512-/iUeP3tq1S0XdNNoMz5C9twLSrM/TH+qElHkXWaPvuNOt+99G75NrV0OS2EqHx5wMN7popYjpc8oTjC1y16DLg==",
-      "path": "system.runtime.compilerservices.unsafe/6.0.0",
-      "hashPath": "system.runtime.compilerservices.unsafe.6.0.0.nupkg.sha512"
     },
     "ThsPlugin.Abstractions/1.0.0": {
       "type": "project",
