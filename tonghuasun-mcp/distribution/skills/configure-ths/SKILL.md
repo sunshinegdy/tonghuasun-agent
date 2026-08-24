@@ -1,6 +1,6 @@
 ---
 name: configure-ths
-description: 配置、检查、修复或卸载 tonghuasun-agent 的本地同花顺插件映射与 MCP 端点。适用于 Codex、WorkBuddy 和 DeepSeek Harness。用户提到首次安装、同花顺安装路径、MCP 连接失败、端口冲突、插件升级、修复映射或卸载时使用。
+description: 配置、检查、修复或卸载 tonghuasun-agent 的本地同花顺插件映射与 MCP 端点。适用于 Codex、Claude Code、WorkBuddy 和 DeepSeek Harness。用户提到首次安装、同花顺安装路径、MCP 连接失败、端口冲突、插件升级、修复映射或卸载时使用。
 ---
 
 # 配置同花顺

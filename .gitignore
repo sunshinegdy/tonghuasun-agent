@@ -14,6 +14,7 @@
 # 本机 MCP 与宿主配置
 **/.mcp.json
 !/codex/.mcp.json
+!/claude-code/.mcp.json
 **/.env
 **/.env.local
 **/.secrets/

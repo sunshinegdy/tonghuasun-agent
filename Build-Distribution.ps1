@@ -26,6 +26,7 @@ function Assert-AdapterVersion([string]$ManifestPath, [string]$AdapterName) {
 }
 
 Assert-AdapterVersion (Join-Path $agentRoot "codex\.codex-plugin\plugin.json") "Codex"
+Assert-AdapterVersion (Join-Path $agentRoot "claude-code\.claude-plugin\plugin.json") "Claude Code"
 Assert-AdapterVersion (Join-Path $agentRoot "workbuddy\plugin.json") "WorkBuddy"
 Assert-AdapterVersion (Join-Path $agentRoot "deepseek-harness\package.json") "DeepSeek Harness"
 
@@ -196,6 +197,14 @@ try {
     Copy-Item -LiteralPath (Join-Path $agentRoot "codex\.mcp.example.json") -Destination (Join-Path $codexStage ".mcp.json")
     Assert-StagedPackage $codexStage "Codex"
     $builtArtifacts += Compress-Plugin $codexStage "tonghuasun-codex" "tonghuasun-agent-codex-$releaseVersion.zip"
+
+    $claudeStage = Join-Path $resolvedTemporaryRoot "claude-code"
+    New-Item -ItemType Directory -Path $claudeStage -Force | Out-Null
+    Copy-ReleaseTree (Join-Path $agentRoot "claude-code") $claudeStage
+    Copy-CommonPackage $claudeStage
+    Copy-Item -LiteralPath (Join-Path $agentRoot "claude-code\.mcp.json") -Destination (Join-Path $claudeStage ".mcp.json")
+    Assert-StagedPackage $claudeStage "Claude Code"
+    $builtArtifacts += Compress-Plugin $claudeStage "tonghuasun-agent" "tonghuasun-agent-claude-code-$releaseVersion.zip"
 
     $workBuddyStage = Join-Path $resolvedTemporaryRoot "workbuddy"
     New-Item -ItemType Directory -Path $workBuddyStage -Force | Out-Null

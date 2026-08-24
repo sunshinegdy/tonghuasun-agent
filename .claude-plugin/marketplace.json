@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "tonghuasun-agent",
+  "owner": {
+    "name": "zhuyifang"
+  },
+  "plugins": [
+    {
+      "name": "tonghuasun-agent",
+      "source": {
+        "source": "archive",
+        "url": "https://github.com/zhuyifang/tonghuasun-agent/releases/download/v0.2.3/tonghuasun-agent-claude-code-0.2.3.zip",
+        "sha256": "0e1b0068c0e5e1c1d9da00d85339636d84719e4eeaef8f705894b07c3ebd0b5b"
+      },
+      "description": "连接本机同花顺，在 Claude Code 中查询行情、持仓并使用实时盯盘。",
+      "version": "0.2.3",
+      "author": {
+        "name": "zhuyifang"
+      },
+      "homepage": "https://github.com/zhuyifang/tonghuasun-agent/tree/main/claude-code",
+      "repository": "https://github.com/zhuyifang/tonghuasun-agent",
+      "license": "AGPL-3.0-only",
+      "keywords": ["同花顺", "证券", "行情", "MCP", "Claude Code"],
+      "category": "productivity"
+    }
+  ]
+}
