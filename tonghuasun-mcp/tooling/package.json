@@ -1,0 +1,20 @@
+{
+  "name": "ths-mcp-server",
+  "version": "0.2.2",
+  "description": "同花顺本机服务的配置器、MCP 传输桥和界面构建工具。",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && node --test tests/widgetAsset.test.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.28.0",
+    "lightweight-charts": "5.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.2",
+    "esbuild": "^0.25.9",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,27 @@
+# 同花顺 MCP
+
+本目录包含三个 Agent 插件共同使用的本机同花顺服务、安装配置器、传输桥和 SDK。
+
+## 目录
+
+- `tooling/`：配置器、传输桥和界面资源的构建工具
+- `distribution/`：三个 Agent 安装包共用的发行文件
+- `legal/`：许可证、隐私政策和第三方声明
+
+C# 开发的同花顺本机插件暂时闭源，发行版以已编译组件提供。
+
+## 接口
+
+同花顺正常运行后，本机服务提供 MCP、REST、WebSocket、OpenAPI 和在线接口文档。
+默认监听 `127.0.0.1:17180`；如果该端口不可用，实际地址以本机运行时配置为准。
+
+- MCP：`http://127.0.0.1:17180/mcp`
+- REST：`http://127.0.0.1:17180/api/v2`
+- WebSocket：`ws://127.0.0.1:17180/api/v2/realtime/ws`
+- 在线文档：`http://127.0.0.1:17180/docs`
+
+## 开发
+
+- [构建工具](./tooling/README.md)
+- [Python SDK](./distribution/sdk/python/README.md)
+- [整体架构](../docs/架构设计.md)

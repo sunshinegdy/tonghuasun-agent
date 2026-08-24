@@ -1,0 +1,3 @@
+- insert:
+    - id: tonghuasun-agent
+      name: 'tonghuasun-agent-deepseek-harness'
