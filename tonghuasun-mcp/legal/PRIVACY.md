@@ -2,7 +2,7 @@
 
 更新日期：2026 年 8 月 24 日
 
-本政策说明 tonghuaxun-agent 如何处理数据。项目不是同花顺官方产品。
+本政策说明 tonghuasun-agent 如何处理数据。项目不是同花顺官方产品。
 
 ## 本机数据
 
@@ -31,7 +31,7 @@
 
 项目采用本机访问令牌和回环地址限制等措施，但任何系统均
 无法保证绝对安全。发现漏洞请通过
-[GitHub 私密安全报告](https://github.com/zhuyifang/tonghuaxun-agent/security/advisories/new)提交。
+[GitHub 私密安全报告](https://github.com/zhuyifang/tonghuasun-agent/security/advisories/new)提交。
 
 ## 政策变更
 

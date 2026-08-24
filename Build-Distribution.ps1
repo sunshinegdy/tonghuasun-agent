@@ -178,7 +178,7 @@ $temporaryRoot = Join-Path $temporaryBase ("distribution-" + $releaseVersion + "
 $resolvedTemporaryBase = [IO.Path]::GetFullPath($temporaryBase).TrimEnd("\") + "\"
 $resolvedTemporaryRoot = [IO.Path]::GetFullPath($temporaryRoot)
 if (-not $resolvedTemporaryRoot.StartsWith($resolvedTemporaryBase, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "拒绝使用 tonghuaxun-agent/.tmp 之外的发行临时目录：$resolvedTemporaryRoot"
+    throw "拒绝使用 tonghuasun-agent/.tmp 之外的发行临时目录：$resolvedTemporaryRoot"
 }
 
 $builtArtifacts = @()
@@ -234,4 +234,3 @@ finally {
         Remove-Item -LiteralPath $resolvedTemporaryRoot -Recurse -Force
     }
 }
-

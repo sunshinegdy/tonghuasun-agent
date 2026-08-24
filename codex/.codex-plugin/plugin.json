@@ -6,8 +6,8 @@
     "name": "zhuyifang",
     "url": "https://github.com/zhuyifang"
   },
-  "homepage": "https://github.com/zhuyifang/tonghuaxun-agent",
-  "repository": "https://github.com/zhuyifang/tonghuaxun-agent",
+  "homepage": "https://github.com/zhuyifang/tonghuasun-agent",
+  "repository": "https://github.com/zhuyifang/tonghuasun-agent",
   "license": "AGPL-3.0-only",
   "keywords": [
     "同花顺",
@@ -32,9 +32,9 @@
       "Account Data",
       "Trading"
     ],
-    "websiteURL": "https://github.com/zhuyifang/tonghuaxun-agent",
-    "privacyPolicyURL": "https://github.com/zhuyifang/tonghuaxun-agent/blob/main/tonghuasun-mcp/legal/PRIVACY.md",
-    "termsOfServiceURL": "https://github.com/zhuyifang/tonghuaxun-agent/blob/main/tonghuasun-mcp/legal/TERMS.md",
+    "websiteURL": "https://github.com/zhuyifang/tonghuasun-agent",
+    "privacyPolicyURL": "https://github.com/zhuyifang/tonghuasun-agent/blob/main/tonghuasun-mcp/legal/PRIVACY.md",
+    "termsOfServiceURL": "https://github.com/zhuyifang/tonghuasun-agent/blob/main/tonghuasun-mcp/legal/TERMS.md",
     "defaultPrompt": [
       "查看我的持仓和各账户资产汇总。",
       "持续盯盘这只股票的逐笔成交与委托变化。",

@@ -1,4 +1,4 @@
-# tonghuaxun-agent
+# tonghuasun-agent
 
 让 Codex、WorkBuddy 和 DeepSeek Harness 使用你电脑上的同花顺。
 
@@ -29,7 +29,7 @@
 ## 项目结构
 
 ```text
-tonghuaxun-agent/
+tonghuasun-agent/
   codex/               # Codex 插件
   workbuddy/           # WorkBuddy 插件
   deepseek-harness/    # DeepSeek Harness 插件

@@ -7,8 +7,8 @@
     "name": "zhuyifang",
     "url": "https://github.com/zhuyifang"
   },
-  "homepage": "https://github.com/zhuyifang/tonghuaxun-agent",
-  "repository": "https://github.com/zhuyifang/tonghuaxun-agent",
+  "homepage": "https://github.com/zhuyifang/tonghuasun-agent",
+  "repository": "https://github.com/zhuyifang/tonghuasun-agent",
   "license": "AGPL-3.0-only",
   "keywords": ["同花顺", "证券", "行情", "MCP", "WorkBuddy"]
 }
