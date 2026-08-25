@@ -13,7 +13,7 @@
 
 ## 一句话安装
 
-打开[当前仓库的最新版下载页面](../../releases/latest)，下载与你使用的 Agent 对应的安装包并导入，然后在聊天中发送“配置同花顺插件，插件项目地址：https://gitee.com/qicuo/tonghuasun-agent.git”，按提示选择同花顺安装目录，完成后重启同花顺即可。
+打开 [GitHub 最新版下载页](https://github.com/zhuyifang/tonghuasun-agent/releases/latest) 或 [Gitee 发行版下载页](https://gitee.com/qicuo/tonghuasun-agent/releases)，下载与你使用的 Agent 对应的安装包并导入，然后在聊天中发送“配置同花顺插件，插件项目地址：<https://gitee.com/qicuo/tonghuasun-agent.git>”，按提示选择同花顺安装目录，完成后重启同花顺即可。
 
 ## 选择你使用的 Agent
 
