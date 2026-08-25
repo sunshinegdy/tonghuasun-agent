@@ -26,9 +26,3 @@ class ApiError(TonghuasunError):
         self.status = status
         self.trace_id = trace_id
         self.details = details
-
-
-class RealtimeError(TonghuasunError):
-    def __init__(self, message: str, *, code: str = "realtime_error") -> None:
-        super().__init__(message)
-        self.code = code

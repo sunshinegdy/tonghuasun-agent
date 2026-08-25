@@ -1,64 +1,87 @@
-# 同花顺 Agent
+# 同花顺 Agent for macOS
 
-### 这是一个独立开发项目，不是同花顺官方产品
+这是一个独立开发项目，不是同花顺官方产品。
 
-在 Codex、Claude Code、WorkBuddy、ZCode、OpenClaw 或 DeepSeek Harness 中，直接查询你电脑上的同花顺行情、K 线、持仓、委托和成交数据。
+版本 `0.3.0` 在 macOS 上通过用户自己的同花顺 iFinD HTTP API 权限，为 Codex 和 Python 提供：
 
-所有功能均免费开放，不设订阅、会员、套餐、试用额度或付费解锁。
+- A 股、主要指数、ETF 和场内基金搜索；
+- 按需实时行情；
+- 1/5/15/30/60 分钟及日/周/月 K 线；
+- 前复权、不复权和后复权；
+- K 线、成交量和 MA5/10/20 交互图表。
 
-## 项目地址
+项目不提供账户、持仓、委托、成交、交易、Level-2、逐笔、新闻、公告或问财能力。
 
-- 国内仓库：[Gitee](https://gitee.com/qicuo/tonghuasun-agent)
-- GitHub 仓库：[GitHub](https://github.com/zhuyifang/tonghuasun-agent)
+## 环境要求
 
-## 一句话安装
+- Apple Silicon Mac；当前开发环境为 macOS 26.5.2。
+- Node.js 24 或更高版本。
+- iFinD 数据接口账号和 refresh token。macOS 可以使用 iFinD HTTP API，不需要 Windows 客户端。
+- Codex 桌面版；Python SDK 需要 Python 3.10 或更高版本。
 
-打开 [GitHub 最新版下载页](https://github.com/zhuyifang/tonghuasun-agent/releases/latest) 或 [Gitee 发行版下载页](https://gitee.com/qicuo/tonghuasun-agent/releases)，下载与你使用的 Agent 对应的安装包并导入，然后在聊天中发送“配置同花顺插件，插件项目地址：<https://gitee.com/qicuo/tonghuasun-agent.git>”，按提示选择同花顺安装目录，完成后重启同花顺即可。
+iFinD refresh token 可在[网页版超级命令](https://quantapi.10jqka.com.cn/gwstatic/static/ds_web/super-command-web/index.html#/AccountDetails)的账号详情中获取。不要把 token 提交到仓库、Issue 或聊天。
 
-## 选择你使用的 Agent
+## 构建
 
-- [在 Codex 中安装](./codex/README.md)
-- [在 Claude Code 中安装](./claude-code/README.md)
-- [在 WorkBuddy 中安装](./workbuddy/README.md)
-- [在 ZCode 中安装](./zcode/README.md)
-- [在 OpenClaw 中安装](./openclaw/README.md)
-- [在 DeepSeek Harness 中安装](./deepseek-harness/README.md)
+```bash
+cd tonghuasun-mcp/tooling
+npm install
+npm test
+cd ../..
+node Build-Distribution.mjs
+```
 
-## 你可以直接这样问
+产物：
 
-- “工业富联今天的盘口怎么样？”
-- “查看贵州茅台最近一个月的日 K 线。”
-- “汇总我的账户资产和当前持仓。”
-- “显示今天的委托、成交和撤单记录。”
-- “持续观察这只股票的逐笔成交变化。”
+```text
+artifacts/
+├── tonghuasun-agent-codex-macos-0.3.0.zip
+└── tonghuasun_codex-0.3.0-py3-none-any.whl
+```
 
-## 使用前准备
+## 配置
 
-- 使用 Windows 10 或 Windows 11。
-- 电脑上已安装同花顺远航版，下载地址：https://download.10jqka.com.cn/index/download/id/275/
-- 当前开发与验证环境为同花顺远航版 11.4.1.3；配置器会识别本机客户端和版本信息，其他版本如遇兼容问题请提交 Issue。
-- 核心插件目前尚未使用 Windows 代码签名，发行包提供 SHA-256 清单供你核对文件；如果不能接受闭源且未签名的组件，请不要安装或开启交易功能。
-- 查询实时行情、账户或交易数据时，请保持同花顺已登录并正常运行。
-- 首次安装或升级后，请重启同花顺；如果 Agent 没有显示新工具，也请重启 Agent 或新建一个任务。
+安装 Codex ZIP 后，在插件目录运行：
 
-## 关于交易功能
+```bash
+node scripts/configure.mjs configure --check --json
+node scripts/configure.mjs configure --json
+node scripts/configure.mjs status --json
+```
 
-交易工具默认关闭，只有你主动开启后才会出现；下单、撤单和改单前仍需你确认，插件不会自行发起交易。
+首次配置时，macOS 钥匙串会隐藏输入 refresh token。配置器不会把 refresh token 写入命令行、配置文件或发行包。
 
-## 数据与隐私
+## 使用示例
 
-行情和账户数据由你电脑上的同花顺客户端提供，服务只监听本机地址；本机访问令牌不会写入公开仓库或安装包模板。
+- “查看贵州茅台、沪深300和沪深300ETF的最新行情。”
+- “显示贵州茅台最近 160 个交易日的前复权日 K 线。”
+- “查看 510300.SH 最近 5 个交易日的 5 分钟 K 线。”
+- “搜索名称中包含新能源的 A 股和 ETF。”
 
-## 支持项目
+Python：
 
-<p align="center">
-  <a href="./assets/support/support-banner.png">
-    <img src="./assets/support/support-banner.png" alt="如果这个项目对你有帮助，欢迎打赏支持" width="100%">
-  </a>
-</p>
+```python
+from tonghuasun_codex import Client
 
-如果这个项目对你有帮助，欢迎打赏支持；打赏完全自愿，不影响任何功能、问题反馈或后续更新。
+ths = Client.discover()
+print(ths.snapshot(["贵州茅台", "000300.SH", "510300.SH"]))
+print(ths.candles("600519.SH", period="1d", adjustment="forward", limit=160))
+```
 
-## 项目说明
+## 本机数据
 
-这是一个独立开发项目，不是同花顺官方产品；Agent 入口、配置器、传输桥和 SDK 依据 AGPL-3.0-only 开源，C# 开发的同花顺本机插件暂时闭源，许可证与隐私说明见 [`tonghuasun-mcp/legal`](./tonghuasun-mcp/legal/)。
+Node 行情服务由 `launchd` 管理，只监听 `127.0.0.1:17180`。本机配置位于：
+
+```text
+~/Library/Application Support/TonghuasunAgent/
+```
+
+refresh token 存在 macOS Keychain；本机服务使用独立随机访问令牌保护 REST/MCP 接口。
+
+## 其他 Agent
+
+仓库暂时保留 Claude Code、WorkBuddy、ZCode、OpenClaw 和 DeepSeek Harness 的旧适配源码，但 `0.3.0` 不构建、不测试也不发布这些入口。
+
+## 许可
+
+公开源码采用 AGPL-3.0-only。行情数据和 API 权限仍受同花顺 iFinD、交易所及用户账号协议约束。详情见 [`tonghuasun-mcp/legal`](./tonghuasun-mcp/legal/)。

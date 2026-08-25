@@ -1,19 +1,12 @@
 # 开源范围
 
-## AGPL-3.0-only 范围
+仓库中的 Agent 入口、Node 行情服务、配置器、MCP 代理、UI、Python SDK、测试、
+构建脚本和文档均采用 AGPL-3.0-only，并适用 `ADDITIONAL_TERMS.md` 的合理署名要求。
 
-- `codex/**`
-- `workbuddy/**`
-- `deepseek-harness/**`
-- `tonghuasun-mcp/tooling/**`
-- `tonghuasun-mcp/distribution/**`，不含闭源原生运行组件
-- 仓库中的公开文档和构建脚本
+以下内容不会进入仓库或发行包，也不因本项目获得任何授权：
 
-以上源码的修改版和衍生版在传播或通过网络向用户提供服务时，应按 AGPL-3.0
-提供对应源码，并保留 `ADDITIONAL_TERMS.md` 指定的合理署名。
+- 用户的 iFinD refresh token、access token 和本机随机访问令牌；
+- 同花顺、iFinD、交易所或其他第三方的数据和软件；
+- macOS 钥匙串、本机配置、证券目录缓存和日志。
 
-## 不在本许可证范围
-
-同花顺本机插件、私有调试资料、签名密钥、运行凭据和第三方组件不因
-与本项目一起分发而自动获得 AGPL 授权，详见 `PROPRIETARY_COMPONENTS.md` 与
-`THIRD_PARTY_NOTICES.md`。
+第三方开源依赖继续适用各自许可证，详见 `THIRD_PARTY_NOTICES.md`。

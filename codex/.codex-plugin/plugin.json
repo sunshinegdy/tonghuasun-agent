@@ -1,7 +1,7 @@
 {
   "name": "tonghuasun-codex",
-  "version": "0.2.6",
-  "description": "连接本机同花顺，为 Codex 提供证券资料、账户持仓、实时行情、盯盘界面和可选交易工具。",
+  "version": "0.3.0",
+  "description": "在 macOS 上通过 iFinD 官方 HTTP API 查询证券、实时行情和 K 线。",
   "author": {
     "name": "zhuyifang",
     "url": "https://github.com/zhuyifang"
@@ -19,26 +19,23 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "同花顺 Agent",
-    "shortDescription": "在 Codex 中查看同花顺行情、持仓与实时盯盘。",
-    "longDescription": "连接本机同花顺，访问证券资料、账户持仓、委托成交和实时行情。交易工具默认关闭，启用后仍需用户确认。",
+    "shortDescription": "在 macOS Codex 中查看 iFinD 行情与 K 线。",
+    "longDescription": "通过 macOS 本机服务连接同花顺 iFinD 官方 HTTP API，提供 A 股、主要指数、ETF 与场内基金搜索、按需实时行情和分钟/日周月 K 线。",
     "developerName": "zhuyifang",
     "category": "Finance",
     "capabilities": [
       "Interactive",
       "Read",
-      "Write",
       "Local MCP",
-      "Market Data",
-      "Account Data",
-      "Trading"
+      "Market Data"
     ],
     "websiteURL": "https://github.com/zhuyifang/tonghuasun-agent",
     "privacyPolicyURL": "https://github.com/zhuyifang/tonghuasun-agent/blob/main/tonghuasun-mcp/legal/PRIVACY.md",
     "termsOfServiceURL": "https://github.com/zhuyifang/tonghuasun-agent/blob/main/tonghuasun-mcp/legal/TERMS.md",
     "defaultPrompt": [
-      "查看我的持仓和各账户资产汇总。",
-      "持续盯盘这只股票的逐笔成交与委托变化。",
-      "查看指定股票的证券资料和 K 线。"
+      "查看贵州茅台、沪深300和沪深300ETF的最新行情。",
+      "显示贵州茅台最近160个交易日的前复权日K线。",
+      "搜索名称中包含新能源的A股和ETF。"
     ],
     "brandColor": "#E5484D"
   },

@@ -17,17 +17,6 @@ class ConnectionConfig:
     plugin_version: str = ""
     process_id: int | None = None
 
-    @property
-    def websocket_url(self) -> str:
-        if self.base_url.startswith("https://"):
-            base = "wss://" + self.base_url.removeprefix("https://")
-        elif self.base_url.startswith("http://"):
-            base = "ws://" + self.base_url.removeprefix("http://")
-        else:
-            raise ConfigurationError(f"无法转换为 WebSocket 地址：{self.base_url}")
-        return base.rstrip("/") + "/api/v2/realtime/ws"
-
-
 def discover_connection(product_home: str | os.PathLike[str] | None = None) -> ConnectionConfig:
     home = _resolve_product_home(product_home)
     config = _read_json(home / "config.json", required=True)
@@ -56,14 +45,14 @@ def _resolve_product_home(product_home: str | os.PathLike[str] | None) -> Path:
     if product_home is not None:
         return Path(product_home).expanduser().resolve()
 
-    overridden = os.environ.get("TONGHUASUN_CODEX_HOME", "").strip()
+    overridden = (
+        os.environ.get("TONGHUASUN_AGENT_HOME", "").strip()
+        or os.environ.get("TONGHUASUN_CODEX_HOME", "").strip()
+    )
     if overridden:
         return Path(os.path.expandvars(overridden)).expanduser().resolve()
 
-    local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
-    if not local_app_data:
-        raise ConfigurationError("LOCALAPPDATA 不可用，无法发现同花顺 Codex 本地配置。")
-    return (Path(local_app_data) / "TonghuasunCodex").resolve()
+    return (Path.home() / "Library" / "Application Support" / "TonghuasunAgent").resolve()
 
 
 def _read_json(path: Path, *, required: bool) -> dict[str, Any]:

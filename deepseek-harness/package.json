@@ -1,7 +1,7 @@
 {
   "name": "tonghuasun-agent-deepseek-harness",
-  "version": "0.2.6",
-  "description": "同花顺 Agent 的 DeepSeek Harness Cordis 入口。",
+  "version": "0.3.0",
+  "description": "macOS iFinD 行情适配源码；0.3.0 暂未测试或发布 DeepSeek Harness 安装包。",
   "license": "AGPL-3.0-only",
   "type": "module",
   "main": "./index.mjs",
@@ -11,7 +11,6 @@
   "files": [
     "cordis.patch.yml",
     "index.mjs",
-    "payload/",
     "scripts/",
     "sdk/",
     "skills/",

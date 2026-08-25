@@ -12,7 +12,9 @@ import {
   type UTCTimestamp
 } from "lightweight-charts";
 
-type ChartSecurity = { market: number; code: string; fullCode: string; name: string };
+type CandlePeriod = "1m" | "5m" | "15m" | "30m" | "60m" | "1d" | "1w" | "1mo";
+type Adjustment = "forward" | "none" | "backward";
+type ChartSecurity = { market: string; code: string; fullCode: string; name: string; type?: string; currency?: string };
 type CandleBar = {
   time: number;
   label: string;
@@ -27,8 +29,9 @@ type CandleChartData = {
   schemaVersion: 1;
   chartType: "candlestick";
   security: ChartSecurity;
-  period: number;
+  period: CandlePeriod;
   periodLabel: string;
+  adjustment: Adjustment;
   requestedLimit: number;
   pointCount: number;
   fetchedAtUtc: string;
@@ -47,15 +50,15 @@ declare global {
   interface Window { openai?: OpenAiBridge; }
 }
 
-const periods = [
-  { value: 2, label: "1分" },
-  { value: 3, label: "5分" },
-  { value: 4, label: "15分" },
-  { value: 5, label: "30分" },
-  { value: 6, label: "60分" },
-  { value: 7, label: "日K" },
-  { value: 8, label: "周K" },
-  { value: 9, label: "月K" }
+const periods: Array<{ value: CandlePeriod; label: string }> = [
+  { value: "1m", label: "1分" },
+  { value: "5m", label: "5分" },
+  { value: "15m", label: "15分" },
+  { value: "30m", label: "30分" },
+  { value: "60m", label: "60分" },
+  { value: "1d", label: "日K" },
+  { value: "1w", label: "周K" },
+  { value: "1mo", label: "月K" }
 ];
 
 const elements = {
@@ -124,7 +127,7 @@ function installBridgeListeners(): void {
 }
 
 function installControls(): void {
-  elements.refresh.addEventListener("click", () => refreshData(currentData?.period ?? 7));
+  elements.refresh.addEventListener("click", () => refreshData(currentData?.period ?? "1d"));
   elements.toggleMa.addEventListener("click", () => {
     showMovingAverages = !showMovingAverages;
     elements.toggleMa.classList.toggle("active", showMovingAverages);
@@ -138,14 +141,14 @@ function renderPeriodButtons(): void {
     const control = document.createElement("button");
     control.type = "button";
     control.className = "period-button";
-    control.dataset.period = String(period.value);
+    control.dataset.period = period.value;
     control.textContent = period.label;
     control.addEventListener("click", () => refreshData(period.value));
     elements.periods.append(control);
   }
 }
 
-async function refreshData(period: number): Promise<void> {
+async function refreshData(period: CandlePeriod): Promise<void> {
   const source = currentData ?? chartDataFromInput(latestInput);
   if (!source) {
     showError("缺少证券参数，请在会话中重新生成图表。");
@@ -155,9 +158,9 @@ async function refreshData(period: number): Promise<void> {
   setBusy(true);
   try {
     const args = {
-      market: source.security.market,
-      security: source.security,
+      security: source.security.fullCode,
       period,
+      adjustment: source.adjustment,
       limit: source.requestedLimit || 160
     };
     const result = await callTool("ths_chart_candle_data", args);
@@ -181,9 +184,9 @@ function applyToolEnvelope(envelope: unknown): boolean {
 function renderChart(data: CandleChartData): void {
   currentData = data;
   latestInput = {
-    market: data.security.market,
-    security: data.security,
+    security: data.security.fullCode,
     period: data.period,
+    adjustment: data.adjustment,
     limit: data.requestedLimit
   };
   updateActivePeriod(data.period);
@@ -202,7 +205,7 @@ function renderChart(data: CandleChartData): void {
     grid: { vertLines: { color: lineColor }, horzLines: { color: lineColor } },
     crosshair: { mode: CrosshairMode.Normal },
     rightPriceScale: { borderColor: lineColor },
-    timeScale: { borderColor: lineColor, timeVisible: data.period <= 6, secondsVisible: false },
+    timeScale: { borderColor: lineColor, timeVisible: data.period.endsWith("m") && data.period !== "1mo", secondsVisible: false },
     localization: { locale: "zh-CN", priceFormatter: (price: number) => formatPrice(price) }
   });
 
@@ -316,7 +319,7 @@ function findChartData(value: unknown, depth = 0): CandleChartData | null {
   if (!record) return null;
   if (isChartData(record.chartData)) return record.chartData;
   if (isChartData(record)) return record;
-  for (const key of ["_meta", "result", "mcp_tool_result", "call_tool_result", "toolResponseMetadata", "params"]) {
+  for (const key of ["structuredContent", "_meta", "result", "mcp_tool_result", "call_tool_result", "toolResponseMetadata", "params"]) {
     const found = findChartData(record[key], depth + 1);
     if (found) return found;
   }
@@ -329,19 +332,23 @@ function isChartData(value: unknown): value is CandleChartData {
 }
 
 function chartDataFromInput(input: Record<string, unknown> | null): CandleChartData | null {
-  const security = asRecord(input?.security);
-  if (!security || typeof security.fullCode !== "string") return null;
+  const securityRecord = asRecord(input?.security);
+  const securityText = typeof input?.security === "string" ? input.security : null;
+  const fullCode = typeof securityRecord?.fullCode === "string" ? securityRecord.fullCode : securityText;
+  if (!fullCode) return null;
+  const [code = fullCode, market = ""] = fullCode.split(".");
   return {
     schemaVersion: 1,
     chartType: "candlestick",
     security: {
-      market: Number(security.market ?? input?.market ?? 1),
-      code: String(security.code ?? ""),
-      fullCode: security.fullCode,
-      name: String(security.name ?? "")
+      market: String(securityRecord?.market ?? market),
+      code: String(securityRecord?.code ?? code),
+      fullCode,
+      name: String(securityRecord?.name ?? fullCode)
     },
-    period: Number(input?.period ?? 7),
+    period: isPeriod(input?.period) ? input.period : "1d",
     periodLabel: "",
+    adjustment: isAdjustment(input?.adjustment) ? input.adjustment : "forward",
     requestedLimit: Number(input?.limit ?? 160),
     pointCount: 0,
     fetchedAtUtc: "",
@@ -371,10 +378,18 @@ function showError(message: string): void {
   elements.loading.classList.add("error");
 }
 
-function updateActivePeriod(period: number): void {
+function updateActivePeriod(period: CandlePeriod): void {
   for (const control of elements.periods.querySelectorAll("button")) {
-    control.classList.toggle("active", Number((control as HTMLElement).dataset.period) === period);
+    control.classList.toggle("active", (control as HTMLElement).dataset.period === period);
   }
+}
+
+function isPeriod(value: unknown): value is CandlePeriod {
+  return typeof value === "string" && ["1m", "5m", "15m", "30m", "60m", "1d", "1w", "1mo"].includes(value);
+}
+
+function isAdjustment(value: unknown): value is Adjustment {
+  return value === "forward" || value === "none" || value === "backward";
 }
 
 function resizeChart(): void {

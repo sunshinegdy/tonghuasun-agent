@@ -1,5 +1,5 @@
 {
   "name": "tonghuasun-agent",
-  "version": "0.2.6",
-  "description": "同花顺本机服务与 Agent 插件公共发行文件。"
+  "version": "0.3.0",
+  "description": "macOS 原生 iFinD 行情服务与 Codex 插件发行文件。"
 }

@@ -21,6 +21,7 @@ rmSync(resolve(pluginRoot, "mcp"), { recursive: true, force: true });
 await buildCandleChartWidget();
 await bundle("src/installer.ts", resolve(pluginRoot, "scripts", "configure.mjs"));
 await bundle("src/mcpProxy.ts", resolve(pluginRoot, "scripts", "tonghuasun-mcp-proxy.mjs"));
+await bundle("src/marketServer.ts", resolve(pluginRoot, "scripts", "market-server.mjs"));
 
 async function buildCandleChartWidget() {
   await buildWidget({
@@ -72,7 +73,7 @@ async function bundle(entryPoint, outfile) {
     bundle: true,
     platform: "node",
     format: "esm",
-    target: "node20",
+    target: "node24",
     minify: true,
     sourcemap: false,
     legalComments: "eof",

@@ -14,16 +14,18 @@ test("K 线组件构建为自包含 HTML", () => {
   assert.doesNotMatch(html, /<(?:script|link)[^>]+(?:src|href)=["']https?:/i);
 });
 
-test("配置器支持显式轮换本机访问令牌", () => {
+test("配置器使用 macOS Keychain 并包含本机市场服务", () => {
   const script = readFileSync(resolve("..", "distribution", "scripts", "configure.mjs"), "utf8");
-  assert.match(script, /--rotate-token/);
-  assert.match(script, /localAccessTokenRotated/);
+  assert.match(script, /com\.tonghuasun-agent\.ifind\.refresh-token/);
+  assert.match(script, /market-server\.mjs/);
+  assert.doesNotMatch(script, /refreshToken\s*:/);
 });
 
 test("MCP 传输桥从本机产品配置发现端点和令牌", () => {
   const script = readFileSync(resolve("..", "distribution", "scripts", "tonghuasun-mcp-proxy.mjs"), "utf8");
-  assert.match(script, /TonghuasunCodex/);
+  assert.match(script, /Application Support/);
   assert.match(script, /endpoint\.json/);
   assert.match(script, /localAccessToken/);
+  assert.doesNotMatch(script, /LOCALAPPDATA/);
   assert.doesNotMatch(script, /CONFIGURE_REQUIRED/);
 });

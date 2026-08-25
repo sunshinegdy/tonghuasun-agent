@@ -1,62 +1,31 @@
-# 同花顺 Python SDK
+# 同花顺 iFinD macOS Python SDK
 
-该 SDK 连接用户本机 `happ.exe` 内运行的同花顺服务。接口是否可用取决于同花顺
-登录状态、账户权限和本机服务配置。
+SDK 连接 `launchd` 管理的本机行情服务，不直接保存 iFinD 凭据。
 
 ## 安装
 
-在插件安装目录的 `sdk/python` 下执行：
-
-```powershell
-python -m pip install ".[realtime,pandas]"
+```bash
+python3 -m pip install tonghuasun_codex-0.3.0-py3-none-any.whl
 ```
 
-## 查询数据
+## 使用
 
 ```python
 from tonghuasun_codex import Client
 
 ths = Client.discover()
 
-kline = ths.candles("601727.SH", period=7, limit=500)
-ticks = ths.ticks("601727.SH", limit=10_000)
-orders = ths.level2("601727.SH", mode="orders", limit=10_000)
+matches = ths.search("贵州茅台")
+quotes = ths.snapshot(["600519.SH", "000300.SH", "510300.SH"])
+daily = ths.candles("600519.SH", period="1d", adjustment="forward", limit=160)
+minutes = ths.candles("510300.SH", period="5m", limit=240)
+
+rows = Client.records(daily)
+frame = Client.to_dataframe(daily)  # 需要 pandas 扩展
 ```
 
-所有查询方法返回插件 API 的 `data` 原始对象，不会把底层字段压缩成自然语言摘要。需要完整响应信封时使用：
+支持周期：`1m`、`5m`、`15m`、`30m`、`60m`、`1d`、`1w`、`1mo`。
 
-```python
-response = ths.request(
-    "POST",
-    "/api/v2/quotes/snapshot",
-    {
-        "market": 1,
-        "codes": ["601727.SH"],
-        "fields": ["latest", "transaction_volume", "transaction_amount"],
-    },
-    unwrap=False,
-)
-```
+支持复权：`forward`、`none`、`backward`。
 
-## 实时数据
-
-```python
-import asyncio
-from tonghuasun_codex import RealtimeClient
-
-async def main():
-    client = RealtimeClient.discover()
-    async for event in client.stream(
-        ["601727.SH"],
-        kind="level2_trade",
-        fields=["price", "volume", "tradeTime", "side"],
-    ):
-        print(event)
-
-asyncio.run(main())
-```
-
-SDK 中的 `create_subscription`、`poll_subscription` 和 `cancel_subscription` 指实时数据订阅，
-不是会员、套餐或付费订阅。
-
-插件只负责返回实时订阅数据；如需保存、计算或转发，请在自己的程序中处理。
+SDK 不包含账户、交易、Level-2、订阅、新闻、公告或问财接口。

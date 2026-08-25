@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -38,7 +39,7 @@ type RuntimeEndpoint = {
   port?: number;
 };
 
-const BRIDGE_VERSION = "0.2.6";
+const BRIDGE_VERSION = "0.3.0";
 const ACCESS_TOKEN_HEADER = "X-Tonghuasun-Codex-Token";
 const TEXT_COMPATIBILITY_ENABLED = isStructuredContentTextCompatibilityEnabled(
   process.env.TONGHUASUN_MCP_TEXT_COMPATIBILITY
@@ -71,7 +72,7 @@ async function main(): Promise<void> {
         ...(upstreamCapabilities.completions ? { completions: upstreamCapabilities.completions } : {}),
         ...(upstreamCapabilities.logging ? { logging: {} } : {})
       },
-      instructions: "同花顺本地 MCP 的透明传输桥；工具、资源和提示词均由同花顺宿主提供。"
+    instructions: "macOS 本地 iFinD 行情 MCP 的透明传输桥；仅提供证券搜索、实时行情和 K 线。"
     }
   );
 
@@ -157,12 +158,12 @@ function discoverConnection(): { mcpUrl: string; accessToken: string } {
   const productHome = resolveProductHome();
   const config = readJson<ProductConfig>(join(productHome, "config.json"));
   if (!config) {
-    throw new Error(`未找到同花顺本地配置：${join(productHome, "config.json")}`);
+    throw new Error(`未找到 macOS 同花顺行情配置：${join(productHome, "config.json")}`);
   }
 
   const accessToken = config.localAccessToken?.trim();
   if (!accessToken) {
-    throw new Error("同花顺本地配置缺少访问令牌，请先运行插件配置器。 ");
+    throw new Error("本机行情配置缺少访问令牌，请先运行插件配置器。 ");
   }
 
   const runtime = readJson<RuntimeEndpoint>(join(productHome, "runtime", "endpoint.json"));
@@ -181,11 +182,7 @@ function resolveProductHome(): string {
     return resolve(expandEnvironmentVariables(overridden));
   }
 
-  const localAppData = process.env.LOCALAPPDATA?.trim();
-  if (!localAppData) {
-    throw new Error("LOCALAPPDATA 不可用，无法发现同花顺本地配置。 ");
-  }
-  return join(localAppData, "TonghuasunCodex");
+  return join(homedir(), "Library", "Application Support", "TonghuasunAgent");
 }
 
 function validateLoopbackMcpUrl(value: string): void {

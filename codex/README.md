@@ -1,31 +1,29 @@
-# 在 Codex 中使用同花顺
+# 在 Codex 中使用同花顺 iFinD 行情
 
-安装同花顺 Agent 后，你可以在 Codex 中查询行情和 K 线、查看持仓、接收实时
-数据并使用盯盘界面。
-
-所有功能均免费开放，不设订阅、会员、套餐、试用额度或付费解锁。
+本插件仅支持 macOS，提供证券搜索、实时行情和 K 线，不提供账户或交易能力。
 
 ## 安装
 
-1. 在仓库根目录运行 `Build-Distribution.ps1` 生成 Codex 安装包。
-2. 在 Codex 的 Plugins 页面安装生成的“同花顺 Agent”插件。
-3. 安装完成后新建一个任务，让 Codex“配置同花顺插件”。
-4. 按提示选择同花顺安装目录，完成后重启同花顺。
+1. 运行 `node Build-Distribution.mjs`。
+2. 在 Codex Plugins 页面安装 `artifacts/tonghuasun-agent-codex-macos-0.3.0.zip`。
+3. 新建任务并让 Codex“配置同花顺插件”。
+4. macOS 钥匙串提示时输入自己的 iFinD refresh token。
+5. 配置完成后新建任务以加载四个行情工具。
 
-Codex 插件的浏览、安装和启用方式见
-[OpenAI 官方插件说明](https://learn.chatgpt.com/docs/plugins)。
+## 手工检查
 
-## 开始使用
+```bash
+node scripts/configure.mjs configure --check --json
+node scripts/configure.mjs configure --json
+node scripts/configure.mjs status --json
+```
 
-可以直接这样提问：
+不要在命令行参数、聊天或文件中粘贴 refresh token；配置器会让 macOS `security` 命令直接隐藏输入。
 
-- `查看贵州茅台最近 60 个交易日的日 K 线。`
-- `汇总我的账户资产和持仓。`
-- `持续盯盘 600519.SH 的逐笔成交。`
+## 使用示例
 
-## 安全说明
+- `查看贵州茅台和沪深300的最新行情。`
+- `显示 600519.SH 最近160个交易日的前复权日K线。`
+- `查看 510300.SH 最近一周的5分钟K线。`
 
-交易工具默认关闭。启用后，下单、撤单和改单仍需用户确认；只查询行情或账户
-信息不会触发交易操作。
-
-本项目不是同花顺官方产品。
+项目不是同花顺官方产品，数据权限和额度取决于用户自己的 iFinD 账号。

@@ -7,10 +7,6 @@
 **/dist/
 *.tsbuildinfo
 
-# .NET 生成物
-**/bin/
-**/obj/
-
 # 本机 MCP 与宿主配置
 **/.mcp.json
 !/codex/.mcp.json
@@ -22,6 +18,10 @@
 **/.secrets/
 *.user
 *.suo
+
+# Python 构建产物
+**/*.egg-info/
+**/build/
 
 # 编辑器与系统文件
 .idea/

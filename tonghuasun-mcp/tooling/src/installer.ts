@@ -1,1036 +1,353 @@
+import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import {
+  chmodSync,
   copyFileSync,
   existsSync,
-  lstatSync,
   mkdirSync,
   readFileSync,
-  readlinkSync,
-  readdirSync,
-  renameSync,
   rmSync,
-  symlinkSync,
-  unlinkSync,
-  writeFileSync
+  writeFileSync,
 } from "node:fs";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { execFileSync } from "node:child_process";
-import { dirname, join, resolve } from "node:path";
+import { createServer } from "node:net";
+import { homedir } from "node:os";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  canManageDestination,
-  createDeploymentPlan,
-  createRetirementPlan,
-  type DeploymentPlanItem,
-} from "./deploymentSafety.js";
-import { removeLegacyCommercialState } from "./legacyCommercialState.js";
+  LAUNCH_AGENT_LABEL,
+  configPath,
+  endpointPath,
+  productHome,
+  readConfig,
+  readEndpoint,
+  writePrivateJson,
+} from "./config.js";
+import { ServiceError, asServiceError } from "./errors.js";
+import { deleteRefreshToken, hasRefreshToken, promptAndStoreRefreshToken } from "./keychain.js";
+import { VERSION, type ProductConfig } from "./types.js";
 
-type DeploymentMode = "auto" | "symlink" | "copy";
-
-type MappingRecord = {
-  fileName: string;
-  sourcePath: string;
-  destinationPath: string;
-  sha256: string;
-  mode: "symlink" | "copy";
-  backupPath?: string;
-};
-
-type PreviousDestination =
-  | { kind: "file"; backupPath: string }
-  | { kind: "symlink"; linkTarget: string };
-
-type ActivatedMapping = {
-  mapping: MappingRecord;
-  previous?: PreviousDestination;
-};
-
-type ActivationResult = {
-  mappings: MappingRecord[];
-  removedRetiredPaths: string[];
-  preservedRetiredPaths: string[];
-};
-
-type ProductConfig = {
-  schemaVersion: number;
-  thsInstallPath: string;
-  thsBinPath: string;
-  pluginDirectory: string;
-  preferredPort: number;
-  portRangeStart: number;
-  portRangeEnd: number;
-  localAccessToken: string;
-  deviceId: string;
-  enableTradeTools: boolean;
-  enableAutomatedTradeApi: boolean;
-  releaseVersion: string;
-  activeReleasePath: string;
-  deploymentMode: "symlink" | "copy";
-  mappings: MappingRecord[];
-  updatedAtUtc: string;
-};
-
-type CliOptions = {
+type Options = {
   command: "configure" | "repair" | "status" | "uninstall";
-  thsPath?: string;
-  payloadPath?: string;
-  version?: string;
-  port?: number;
-  enableTradeTools?: boolean;
-  enableAutomatedTradeApi?: boolean;
-  rotateToken?: boolean;
-  force: boolean;
-  dryRun: boolean;
-  keepLegacyState: boolean;
-  mode: DeploymentMode;
   json: boolean;
+  check: boolean;
+  purge: boolean;
+  port?: number;
 };
 
-class ConfigurationError extends Error {
-  constructor(
-    public readonly code: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = "ConfigurationError";
-  }
-}
+await main();
 
-const productHome = resolveProductHome();
-const configPath = join(productHome, "config.json");
-const endpointPath = join(productHome, "runtime", "endpoint.json");
-
-main();
-
-function main(): void {
+async function main(): Promise<void> {
   let json = process.argv.includes("--json");
   try {
     const options = parseArguments(process.argv.slice(2));
     json = options.json;
-    if (options.command === "status") {
-      printResult(readStatus(), options.json);
-      return;
-    }
-
-    if (options.command === "uninstall") {
-      printResult(uninstall(options), options.json);
-      return;
-    }
-
-    printResult(configure(options), options.json);
+    const result = options.command === "status"
+      ? await status()
+      : options.command === "uninstall"
+        ? await uninstall(options)
+        : await configure(options);
+    print(result, json);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const code = error instanceof ConfigurationError ? error.code : "configuration_failed";
-    if (json) {
-      console.log(JSON.stringify({ ok: false, error: { code, message } }, null, 2));
-    } else {
-      console.error(`同花顺 Agent 配置失败 [${code}]：${message}`);
-    }
+    const mapped = asServiceError(error);
+    const result = { ok: false, error: { code: mapped.code, message: mapped.message, details: mapped.details } };
+    if (json) console.log(JSON.stringify(result, null, 2));
+    else console.error(`同花顺 Agent 配置失败 [${mapped.code}]：${mapped.message}`);
     process.exitCode = 1;
   }
 }
 
-function configure(options: CliOptions): Record<string, unknown> {
-  const existingConfig = readJson<ProductConfig>(configPath);
-  const thsPaths = resolveThsPaths(options.thsPath ?? existingConfig?.thsInstallPath);
-  const port = validatePort(options.port ?? existingConfig?.preferredPort ?? 17180);
-  const version = options.version?.trim() || resolvePackagedVersion();
-  const payloadPath = resolve(options.payloadPath ?? join(resolvePluginRoot(), "payload", "ths-plugin"));
-  validatePayload(payloadPath);
-  const hostCompatibility = readHostCompatibility(thsPaths.binPath);
-  const payloadFiles = listPayloadFiles(payloadPath);
-  const deploymentPlan = createDeploymentPlan(
-    payloadFiles,
-    thsPaths.pluginDirectory,
-    existingConfig?.mappings ?? [],
-  );
-  const retirementPlan = createRetirementPlan(
-    payloadFiles,
-    thsPaths.pluginDirectory,
-    existingConfig?.mappings ?? [],
-  );
-  const conflicts = deploymentPlan.filter((item) => item.action === "conflict");
-
-  if (options.dryRun) {
+async function configure(options: Options): Promise<Record<string, unknown>> {
+  assertMacAndNode();
+  const home = productHome();
+  assertSafeProductHome(home);
+  const existing = readConfig(home, false);
+  const port = normalizePort(options.port ?? existing?.preferredPort ?? 17180);
+  const pluginRoot = resolvePluginRoot();
+  const sourceServer = join(pluginRoot, "scripts", "market-server.mjs");
+  const sourceWidget = join(pluginRoot, "ui", "candle-chart.html");
+  for (const path of [sourceServer, sourceWidget]) {
+    if (!existsSync(path)) throw new ServiceError("not_configured", `发行包缺少文件：${path}`, 500);
+  }
+  const releasePath = safeChild(home, join(home, "releases", VERSION));
+  const keychainConfigured = hasRefreshToken();
+  const portAvailable = await canListen(port);
+  if (options.check) {
     return {
       ok: true,
-      dryRun: true,
-      hostRunning: isHostRunning(),
-      thsInstallPath: thsPaths.installPath,
-      pluginDirectory: thsPaths.pluginDirectory,
-      releaseVersion: version,
-      hostCompatibility,
-      requestedMode: options.mode,
-      force: options.force,
-      hasConflicts: conflicts.length > 0,
-      deploymentPlan,
-      retirementPlan,
-      nextAction: conflicts.length > 0 && !options.force
-        ? "发现非本安装器管理的同名文件；确认文件归属后才能使用 --force 覆盖。"
-        : "预检通过；退出同花顺后移除 --dry-run 即可执行配置。",
+      check: true,
+      platform: process.platform,
+      architecture: process.arch,
+      nodeVersion: process.version,
+      nodePath: process.execPath,
+      productHome: home,
+      releasePath,
+      port,
+      portAvailable,
+      keychainConfigured,
+      nextAction: keychainConfigured
+        ? "预检完成，可以运行 configure。"
+        : "预检完成；运行 configure 时 macOS 钥匙串会提示输入 iFinD refresh token。",
     };
   }
 
-  if (conflicts.length > 0 && !options.force) {
-    throw new Error(formatDeploymentConflictMessage(conflicts));
+  stopLaunchAgent();
+  if (!await canListen(port)) {
+    throw new ServiceError("invalid_request", `本机端口 ${port} 已被其他程序占用。`, 409);
   }
-
-  ensureHostStopped();
-  ensureHttpUrlAcl(port);
-
-  const releasePath = join(productHome, "releases", sanitizePathSegment(version), "ths-plugin");
-  mkdirSync(releasePath, { recursive: true });
-  removeRetiredReleaseFiles(payloadFiles, releasePath);
-  const releaseFiles = copyPayload(payloadFiles, releasePath);
-  const deploymentMode = resolveDeploymentMode(options.mode, thsPaths.pluginDirectory, releaseFiles[0]?.sourcePath);
-  const backupDirectory = join(productHome, "backups", createTimestamp());
-  const activation = activateRelease(
-    releaseFiles,
-    thsPaths.pluginDirectory,
-    deploymentMode,
-    backupDirectory,
-    existingConfig?.mappings ?? [],
-    options.force,
-  );
-  const removedLegacyRestrictionPaths = options.keepLegacyState
-    ? []
-    : removeLegacyCommercialState(productHome, resolvePluginRoot(), [releasePath]);
+  if (!keychainConfigured) {
+    console.error("请输入 iFinD refresh token；输入内容由 macOS security 隐藏处理，不会写入命令行或配置文件。");
+    promptAndStoreRefreshToken();
+  }
+  mkdirSync(join(releasePath, "scripts"), { recursive: true, mode: 0o700 });
+  mkdirSync(join(releasePath, "ui"), { recursive: true, mode: 0o700 });
+  copyFileSync(sourceServer, join(releasePath, "scripts", "market-server.mjs"));
+  copyFileSync(sourceWidget, join(releasePath, "ui", "candle-chart.html"));
+  chmodSync(join(releasePath, "scripts", "market-server.mjs"), 0o700);
+  chmodSync(join(releasePath, "ui", "candle-chart.html"), 0o600);
 
   const config: ProductConfig = {
-    schemaVersion: 3,
-    thsInstallPath: thsPaths.installPath,
-    thsBinPath: thsPaths.binPath,
-    pluginDirectory: thsPaths.pluginDirectory,
+    schemaVersion: 1,
     preferredPort: port,
-    portRangeStart: port,
-    portRangeEnd: port,
-    localAccessToken: resolveLocalAccessToken(existingConfig?.localAccessToken, options.rotateToken),
-    deviceId: existingConfig?.deviceId || randomUUID(),
-    enableTradeTools: options.enableTradeTools ?? existingConfig?.enableTradeTools ?? false,
-    enableAutomatedTradeApi: options.enableAutomatedTradeApi ?? existingConfig?.enableAutomatedTradeApi ?? false,
-    releaseVersion: version,
+    localAccessToken: existing?.localAccessToken || randomBytes(32).toString("base64url"),
+    releaseVersion: VERSION,
     activeReleasePath: releasePath,
-    deploymentMode,
-    mappings: activation.mappings,
-    updatedAtUtc: new Date().toISOString()
+    nodePath: process.execPath,
+    updatedAtUtc: new Date().toISOString(),
   };
-
-  mkdirSync(productHome, { recursive: true });
-  writeJsonAtomic(configPath, config);
+  writePrivateJson(configPath(home), config);
+  const plist = writeLaunchAgent(config, home);
+  startLaunchAgent(plist);
+  const endpoint = await waitForEndpoint(home, 8_000);
   return {
     ok: true,
     configured: true,
-    thsInstallPath: config.thsInstallPath,
-    pluginDirectory: config.pluginDirectory,
-    releaseVersion: config.releaseVersion,
-    hostCompatibility,
-    activeReleasePath: config.activeReleasePath,
-    deploymentMode: config.deploymentMode,
-    preferredPort: config.preferredPort,
-    deviceId: config.deviceId,
-    enableTradeTools: config.enableTradeTools,
-    enableAutomatedTradeApi: config.enableAutomatedTradeApi,
-    mcpUrl: `http://127.0.0.1:${port}/mcp`,
-    apiBaseUrl: `http://127.0.0.1:${port}/api/v2`,
-    openApiUrl: `http://127.0.0.1:${port}/openapi/v2.json`,
-    websocketUrl: `ws://127.0.0.1:${port}/api/v2/realtime/ws`,
-    pythonSdkPath: join(resolvePluginRoot(), "sdk", "python"),
-    mappedFiles: config.mappings.length,
-    removedRetiredPaths: activation.removedRetiredPaths,
-    preservedRetiredPaths: activation.preservedRetiredPaths,
-    removedLegacyRestrictionPaths,
-    configPath,
-    mcpBridgePath: join(resolvePluginRoot(), "scripts", "tonghuasun-mcp-proxy.mjs"),
-    localAccessTokenRotated: options.rotateToken === true,
-    forcedOverwrite: options.force,
-    legacyStatePreserved: options.keepLegacyState,
-    startupGuide: createStartupGuide(port),
-    nextAction: "请启动同花顺，并重启当前 Agent 宿主或新建任务以重新加载 MCP。"
+    repaired: options.command === "repair",
+    productHome: home,
+    releaseVersion: VERSION,
+    port,
+    baseUrl: endpoint?.baseUrl ?? `http://127.0.0.1:${port}`,
+    mcpUrl: endpoint?.mcpUrl ?? `http://127.0.0.1:${port}/mcp`,
+    endpointPublished: Boolean(endpoint),
+    keychainConfigured: true,
+    launchAgent: plist,
+    nextAction: endpoint
+      ? "配置完成；请在 Codex 中新建任务以加载行情工具。"
+      : "配置已写入，但服务尚未发布端点；请运行 status 查看日志路径。",
   };
 }
 
-function createStartupGuide(port: number): Record<string, unknown> {
-  return {
-    title: "同花顺启动后可使用以下本机入口：",
-    endpoints: [
-      {
-        name: "MCP",
-        url: `http://127.0.0.1:${port}/mcp`,
-        usage: "供 Codex、Claude Code、WorkBuddy、ZCode、OpenClaw 和 DeepSeek Harness 加载并调用同花顺工具。"
-      },
-      {
-        name: "REST API",
-        url: `http://127.0.0.1:${port}/api/v2`,
-        usage: "供本机程序通过 HTTP 调用接口。"
-      },
-      {
-        name: "OpenAPI",
-        url: `http://127.0.0.1:${port}/openapi/v2.json`,
-        usage: "查看 REST API 的接口定义。"
-      },
-      {
-        name: "实时 WebSocket",
-        url: `ws://127.0.0.1:${port}/api/v2/realtime/ws`,
-        usage: "订阅实时行情和事件推送。"
-      }
-    ],
-    notice: "以上入口仅监听本机，访问时需要本机访问令牌。"
-  };
-}
-
-function uninstall(options: CliOptions): Record<string, unknown> {
-  const config = readJson<ProductConfig>(configPath);
-  const plan = createUninstallPlan(config);
-  if (options.dryRun) {
-    return {
-      ok: true,
-      dryRun: true,
-      configured: !!config,
-      hostRunning: isHostRunning(),
-      legacyStatePreserved: options.keepLegacyState,
-      ...plan,
-      nextAction: "预检完成；确认清单后移除 --dry-run 即可卸载。",
-    };
-  }
-
-  ensureHostStopped();
-  const removedLegacyRestrictionPaths = options.keepLegacyState
-    ? []
-    : removeLegacyCommercialState(productHome, resolvePluginRoot());
-  if (!config) {
-    return {
-      ok: true,
-      configured: false,
-      removedLegacyRestrictionPaths,
-      legacyStatePreserved: options.keepLegacyState,
-      message: "未发现已安装配置。"
-    };
-  }
-
-  const removed: string[] = [];
-  const preserved: string[] = [];
-  const restored: string[] = [];
-
-  for (const mapping of config.mappings ?? []) {
-    if (canManageDestination(mapping)) {
-      unlinkSync(mapping.destinationPath);
-      removed.push(mapping.destinationPath);
-    } else if (existsSync(mapping.destinationPath) || isSymbolicLink(mapping.destinationPath)) {
-      preserved.push(mapping.destinationPath);
-      continue;
-    }
-
-    if (mapping.backupPath && existsSync(mapping.backupPath)) {
-      copyFileSync(mapping.backupPath, mapping.destinationPath);
-      restored.push(mapping.destinationPath);
-    }
-  }
-
-  if (existsSync(endpointPath)) {
-    rmSync(endpointPath, { force: true });
-  }
-
-  const archivedConfigPath = join(productHome, `config.uninstalled-${createTimestamp()}.json`);
-  renameSync(configPath, archivedConfigPath);
+async function status(): Promise<Record<string, unknown>> {
+  const home = productHome();
+  const config = readConfig(home, false);
+  const endpoint = readEndpoint(home);
+  const running = endpoint?.processId ? isProcessRunning(endpoint.processId) : false;
   return {
     ok: true,
-    configured: false,
-    removed,
-    restored,
-    preserved,
-    removedLegacyRestrictionPaths,
-    legacyStatePreserved: options.keepLegacyState,
-    archivedConfigPath,
-    releasesPreserved: true
-  };
-}
-
-function createUninstallPlan(config: ProductConfig | null): Record<string, unknown> {
-  const wouldRemove: string[] = [];
-  const wouldRestore: string[] = [];
-  const wouldPreserve: string[] = [];
-
-  for (const mapping of config?.mappings ?? []) {
-    const managed = canManageDestination(mapping);
-    if (managed) {
-      wouldRemove.push(mapping.destinationPath);
-    } else if (existsSync(mapping.destinationPath) || isSymbolicLink(mapping.destinationPath)) {
-      wouldPreserve.push(mapping.destinationPath);
-      continue;
-    }
-
-    if (mapping.backupPath && existsSync(mapping.backupPath)) {
-      wouldRestore.push(mapping.destinationPath);
-    }
-  }
-
-  return {
-    wouldRemove,
-    wouldRestore,
-    wouldPreserve,
-    wouldArchiveConfig: config ? join(productHome, "config.uninstalled-<时间>.json") : null,
-    releasesPreserved: true,
-  };
-}
-
-function readStatus(): Record<string, unknown> {
-  const config = readJson<ProductConfig>(configPath);
-  const endpoint = readJson<Record<string, unknown>>(endpointPath);
-  const mappings = (config?.mappings ?? []).map((mapping) => ({
-    fileName: mapping.fileName,
-    mode: mapping.mode,
-    healthy: isMappingHealthy(mapping)
-  }));
-
-  return {
-    ok: true,
-    configured: !!config,
-    hostRunning: isHostRunning(),
-    configPath,
-    endpointPath,
-    endpointPublished: !!endpoint,
-    config: config
-      ? {
-          thsInstallPath: config.thsInstallPath,
-          releaseVersion: config.releaseVersion,
-          deploymentMode: config.deploymentMode,
-          preferredPort: config.preferredPort,
-          deviceId: config.deviceId,
-          enableTradeTools: config.enableTradeTools ?? false,
-          enableAutomatedTradeApi: config.enableAutomatedTradeApi ?? false,
-          localAccessTokenConfigured: /^[a-f0-9]{64}$/i.test(config.localAccessToken ?? ""),
-          mcpUrl: `http://127.0.0.1:${config.preferredPort}/mcp`,
-          apiBaseUrl: `http://127.0.0.1:${config.preferredPort}/api/v2`,
-          openApiUrl: `http://127.0.0.1:${config.preferredPort}/openapi/v2.json`,
-          websocketUrl: `ws://127.0.0.1:${config.preferredPort}/api/v2/realtime/ws`,
-          pythonSdkPath: join(resolvePluginRoot(), "sdk", "python"),
-          activeReleasePath: config.activeReleasePath
-        }
-      : null,
+    configured: Boolean(config),
+    running,
+    keychainConfigured: hasRefreshToken(),
+    productHome: home,
+    configPath: configPath(home),
+    endpointPath: endpointPath(home),
+    endpointPublished: Boolean(endpoint),
+    config: config ? {
+      schemaVersion: config.schemaVersion,
+      preferredPort: config.preferredPort,
+      releaseVersion: config.releaseVersion,
+      activeReleasePath: config.activeReleasePath,
+      nodePath: config.nodePath,
+      updatedAtUtc: config.updatedAtUtc,
+    } : null,
     endpoint,
-    hostCompatibility: config ? readHostCompatibility(config.thsBinPath) : null,
-    startupGuide: config ? createStartupGuide(config.preferredPort) : null,
-    mappings,
-    healthyMappings: mappings.filter((item) => item.healthy).length,
-    totalMappings: mappings.length
+    launchAgentPath: launchAgentPath(),
+    logs: {
+      stdout: join(homedir(), "Library", "Logs", "TonghuasunAgent", "market-server.log"),
+      stderr: join(homedir(), "Library", "Logs", "TonghuasunAgent", "market-server.error.log"),
+    },
   };
 }
 
-function activateRelease(
-  releaseFiles: Array<{ fileName: string; sourcePath: string; sha256: string }>,
-  pluginDirectory: string,
-  mode: "symlink" | "copy",
-  backupDirectory: string,
-  existingMappings: readonly MappingRecord[],
-  force: boolean,
-): ActivationResult {
-  mkdirSync(pluginDirectory, { recursive: true });
-  const activatedMappings: ActivatedMapping[] = [];
-  const retiredMappings: ActivatedMapping[] = [];
-  const removedRetiredPaths: string[] = [];
-  const preservedRetiredPaths: string[] = [];
-
-  for (const file of releaseFiles) {
-    const destinationPath = join(pluginDirectory, file.fileName);
-    let previous: PreviousDestination | undefined;
-    try {
-      if (existsSync(destinationPath) || isSymbolicLink(destinationPath)) {
-        assertDestinationCanBeReplaced(destinationPath, existingMappings, force);
-        previous = backupExistingDestination(destinationPath, backupDirectory);
-        unlinkSync(destinationPath);
-      }
-
-      if (mode === "symlink") {
-        symlinkSync(file.sourcePath, destinationPath, "file");
-      } else {
-        copyFileSync(file.sourcePath, destinationPath);
-      }
-
-      const mapping: MappingRecord = {
-        fileName: file.fileName,
-        sourcePath: file.sourcePath,
-        destinationPath,
-        sha256: file.sha256,
-        mode,
-        ...(previous?.kind === "file" ? { backupPath: previous.backupPath } : {})
-      };
-      activatedMappings.push({ mapping, ...(previous ? { previous } : {}) });
-    } catch (error) {
-      // 激活必须具备事务性，避免安装中断后把 PluginSdks 留在半新半旧状态。
-      removeFileIfPresent(destinationPath);
-      restorePreviousDestination(previous, destinationPath);
-      rollbackMappings(activatedMappings);
-      throw error;
-    }
+async function uninstall(options: Options): Promise<Record<string, unknown>> {
+  const home = productHome();
+  assertSafeProductHome(home);
+  const plan = {
+    launchAgentPath: launchAgentPath(),
+    configPath: configPath(home),
+    runtimePath: join(home, "runtime"),
+    releasesPath: join(home, "releases"),
+    cachePath: join(home, "cache"),
+    purge: options.purge,
+  };
+  if (options.check) return { ok: true, check: true, uninstallPlan: plan };
+  stopLaunchAgent();
+  rmSync(launchAgentPath(), { force: true });
+  rmSync(configPath(home), { force: true });
+  rmSync(join(home, "runtime"), { recursive: true, force: true });
+  rmSync(join(home, "releases"), { recursive: true, force: true });
+  if (options.purge) {
+    deleteRefreshToken();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(join(homedir(), "Library", "Logs", "TonghuasunAgent"), { recursive: true, force: true });
   }
-
-  const activeDestinations = new Set(
-    releaseFiles.map((file) => normalizePath(join(pluginDirectory, file.fileName))),
-  );
-  try {
-    for (const mapping of existingMappings) {
-      if (activeDestinations.has(normalizePath(mapping.destinationPath))) {
-        continue;
-      }
-      if (!existsSync(mapping.destinationPath) && !isSymbolicLink(mapping.destinationPath)) {
-        continue;
-      }
-      if (!canManageDestination(mapping)) {
-        preservedRetiredPaths.push(mapping.destinationPath);
-        continue;
-      }
-
-      const previous = backupExistingDestination(mapping.destinationPath, backupDirectory);
-      unlinkSync(mapping.destinationPath);
-      retiredMappings.push({ mapping, previous });
-      removedRetiredPaths.push(mapping.destinationPath);
-    }
-  } catch (error) {
-    // 旧文件清理也是升级事务的一部分；失败时恢复旧文件和本轮已替换的文件。
-    rollbackMappings(retiredMappings);
-    rollbackMappings(activatedMappings);
-    throw error;
-  }
-
   return {
-    mappings: activatedMappings.map((item) => item.mapping),
-    removedRetiredPaths,
-    preservedRetiredPaths,
+    ok: true,
+    uninstalled: true,
+    purged: options.purge,
+    keychainPreserved: !options.purge,
+    cachePreserved: !options.purge,
   };
 }
 
-function removeRetiredReleaseFiles(
-  payloadFiles: readonly { fileName: string }[],
-  releasePath: string,
-): void {
-  const activeNames = new Set(payloadFiles.map((file) => file.fileName.toLowerCase()));
-  for (const entry of readdirSync(releasePath, { withFileTypes: true })) {
-    if ((!entry.isFile() && !entry.isSymbolicLink()) || activeNames.has(entry.name.toLowerCase())) {
-      continue;
-    }
-    rmSync(join(releasePath, entry.name), { force: true });
-  }
+function writeLaunchAgent(config: ProductConfig, home: string): string {
+  const path = launchAgentPath();
+  const logs = join(homedir(), "Library", "Logs", "TonghuasunAgent");
+  mkdirSync(dirname(path), { recursive: true });
+  mkdirSync(logs, { recursive: true, mode: 0o700 });
+  const serverPath = join(config.activeReleasePath, "scripts", "market-server.mjs");
+  const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>${LAUNCH_AGENT_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array><string>${xml(config.nodePath)}</string><string>${xml(serverPath)}</string></array>
+  <key>EnvironmentVariables</key>
+  <dict><key>TONGHUASUN_AGENT_HOME</key><string>${xml(home)}</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ProcessType</key><string>Interactive</string>
+  <key>StandardOutPath</key><string>${xml(join(logs, "market-server.log"))}</string>
+  <key>StandardErrorPath</key><string>${xml(join(logs, "market-server.error.log"))}</string>
+</dict>
+</plist>
+`;
+  writeFileSync(path, plist, { encoding: "utf8", mode: 0o600 });
+  chmodSync(path, 0o600);
+  return path;
 }
 
-function rollbackMappings(activatedMappings: ActivatedMapping[]): void {
-  for (const item of [...activatedMappings].reverse()) {
-    removeFileIfPresent(item.mapping.destinationPath);
-    restorePreviousDestination(item.previous, item.mapping.destinationPath);
-  }
-}
-
-function restorePreviousDestination(previous: PreviousDestination | undefined, destinationPath: string): void {
-  if (previous?.kind === "file" && existsSync(previous.backupPath)) {
-    copyFileSync(previous.backupPath, destinationPath);
-  } else if (previous?.kind === "symlink") {
-    symlinkSync(previous.linkTarget, destinationPath, "file");
-  }
-}
-
-function removeFileIfPresent(filePath: string): void {
-  if (existsSync(filePath) || isSymbolicLink(filePath)) {
-    rmSync(filePath, { force: true });
-  }
-}
-
-function backupExistingDestination(
-  destinationPath: string,
-  backupDirectory: string,
-): PreviousDestination {
-  if (isSymbolicLink(destinationPath)) {
-    return { kind: "symlink", linkTarget: readlinkSync(destinationPath) };
-  }
-
-  mkdirSync(backupDirectory, { recursive: true });
-  const backupPath = join(backupDirectory, destinationPath.split(/[\\/]/).pop() ?? "unknown-file");
-  copyFileSync(destinationPath, backupPath);
-  return { kind: "file", backupPath };
-}
-
-function assertDestinationCanBeReplaced(
-  destinationPath: string,
-  existingMappings: readonly MappingRecord[],
-  force: boolean,
-): void {
-  if (force) return;
-
-  const normalizedDestination = normalizePath(destinationPath);
-  const mapping = existingMappings.find(
-    (item) => normalizePath(item.destinationPath) === normalizedDestination,
-  );
-  if (!mapping || !canManageDestination(mapping)) {
-    throw new Error(
-      `拒绝覆盖不属于当前安装配置或已被修改的文件：${destinationPath}。` +
-      "确认文件归属后，可显式使用 --force。",
-    );
-  }
-}
-
-function resolveDeploymentMode(
-  requestedMode: DeploymentMode,
-  pluginDirectory: string,
-  sourceProbePath: string | undefined
-): "symlink" | "copy" {
-  if (requestedMode === "copy") {
-    return "copy";
-  }
-
-  if (!sourceProbePath) {
-    throw new Error("同花顺插件产物为空。请先执行发行构建。 ");
-  }
-
-  mkdirSync(pluginDirectory, { recursive: true });
-  const probePath = join(pluginDirectory, `.tonghuasun-codex-link-probe-${process.pid}`);
+function startLaunchAgent(plist: string): void {
+  const domain = `gui/${process.getuid?.() ?? 0}`;
   try {
-    symlinkSync(sourceProbePath, probePath, "file");
-    unlinkSync(probePath);
-    return "symlink";
+    execFileSync("/bin/launchctl", ["bootstrap", domain, plist], { stdio: "ignore" });
+    execFileSync("/bin/launchctl", ["kickstart", "-k", `${domain}/${LAUNCH_AGENT_LABEL}`], { stdio: "ignore" });
   } catch (error) {
-    if (existsSync(probePath) || isSymbolicLink(probePath)) {
-      rmSync(probePath, { force: true });
-    }
-
-    if (requestedMode === "symlink") {
-      throw new Error(
-        `无法创建文件符号链接。请开启 Windows 开发者模式或以管理员身份运行。${formatErrorCode(error)}`
-      );
-    }
-
-    return "copy";
+    throw new ServiceError("internal_error", "无法启动 macOS LaunchAgent。", 500, {
+      reason: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
-function listPayloadFiles(
-  payloadPath: string,
-): Array<{ fileName: string; sourcePath: string; sha256: string }> {
-  return readdirSync(payloadPath, { withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => {
-      const sourcePath = join(payloadPath, entry.name);
-      return {
-        fileName: entry.name,
-        sourcePath,
-        sha256: hashFile(sourcePath),
-      };
-    })
-    .sort((left, right) => left.fileName.localeCompare(right.fileName));
-}
-
-function copyPayload(
-  payloadFiles: ReadonlyArray<{ fileName: string; sourcePath: string; sha256: string }>,
-  releasePath: string
-): Array<{ fileName: string; sourcePath: string; sha256: string }> {
-  return payloadFiles
-    .map((file) => {
-      const releaseFilePath = join(releasePath, file.fileName);
-      copyFileSync(file.sourcePath, releaseFilePath);
-      return {
-        fileName: file.fileName,
-        sourcePath: releaseFilePath,
-        sha256: hashFile(releaseFilePath)
-      };
-    })
-    .sort((left, right) => left.fileName.localeCompare(right.fileName));
-}
-
-function resolveThsPaths(inputPath: string | undefined): {
-  installPath: string;
-  binPath: string;
-  pluginDirectory: string;
-} {
-  const candidates = inputPath ? [inputPath] : detectThsCandidates();
-  for (const candidate of candidates) {
-    const normalized = resolve(candidate);
-    const binPath = existsSync(join(normalized, "happ.exe")) ? normalized : join(normalized, "bin");
-    if (existsSync(join(binPath, "happ.exe"))) {
-      return {
-        installPath: dirname(binPath),
-        binPath,
-        pluginDirectory: join(binPath, "PluginSdks")
-      };
-    }
-  }
-
-  throw new ConfigurationError(
-    "client_not_found",
-    "没有找到同花顺 happ.exe。请使用 --ths-path 指定同花顺安装目录。",
-  );
-}
-
-function readHostCompatibility(binPath: string): Record<string, unknown> {
-  const executablePath = join(binPath, "happ.exe");
-  if (!existsSync(executablePath)) {
-    return {
-      recognized: false,
-      code: "client_not_found",
-      executablePath,
-      reason: "未找到 happ.exe",
-    };
-  }
-
-  const escapedPath = executablePath.replace(/'/g, "''");
-  const command = [
-    `$version = (Get-Item -LiteralPath '${escapedPath}').VersionInfo`,
-    `[pscustomobject]@{ fileVersion = $version.FileVersion; productVersion = $version.ProductVersion; productName = $version.ProductName; fileDescription = $version.FileDescription } | ConvertTo-Json -Compress`,
-  ].join("; ");
+function stopLaunchAgent(): void {
+  const domain = `gui/${process.getuid?.() ?? 0}`;
   try {
-    const output = execFileSync(
-      "powershell.exe",
-      ["-NoProfile", "-NonInteractive", "-Command", command],
-      { encoding: "utf8", windowsHide: true, timeout: 5_000 },
-    );
-    const versionInfo = JSON.parse(output) as Record<string, unknown>;
-    const recognized = versionInfo.productName === "Hevo.App" || versionInfo.fileDescription === "happ";
-    return {
-      recognized,
-      code: recognized ? "supported_client" : "unsupported_client",
-      supportedClient: "同花顺远航版",
-      executablePath,
-      ...versionInfo,
-      ...(recognized ? {} : { reason: "检测到 happ.exe，但无法确认是否为已验证的同花顺远航版客户端" }),
-    };
-  } catch (error) {
-    return {
-      recognized: false,
-      code: "client_version_unreadable",
-      executablePath,
-      reason: `无法读取客户端版本信息。${formatErrorCode(error)}`,
-    };
-  }
-}
-
-function detectThsCandidates(): string[] {
-  const candidates: string[] = [];
-  const configured = readJson<ProductConfig>(configPath)?.thsInstallPath;
-  if (configured) {
-    candidates.push(configured);
-  }
-
-  for (const drive of "CDEFGHIJKLMNOPQRSTUVWXYZ") {
-    candidates.push(`${drive}:\\同花顺远航版`);
-    candidates.push(`${drive}:\\Program Files\\同花顺远航版`);
-    candidates.push(`${drive}:\\Program Files (x86)\\同花顺远航版`);
-  }
-
-  return candidates;
-}
-
-function validatePayload(payloadPath: string): void {
-  if (!existsSync(join(payloadPath, "ThsPlugin.Plugin.dll"))) {
-    throw new ConfigurationError(
-      "invalid_payload",
-      `插件产物不完整：${payloadPath} 中缺少 ThsPlugin.Plugin.dll。`,
-    );
-  }
-}
-
-function resolvePackagedVersion(): string {
-  const pluginRoot = resolvePluginRoot();
-  const manifests = [
-    join(pluginRoot, "plugin.json"),
-    join(pluginRoot, ".codex-plugin", "plugin.json"),
-    join(pluginRoot, "package.json"),
-    join(pluginRoot, "manifest.json")
-  ];
-  for (const manifestPath of manifests) {
-    const version = readJson<{ version?: string }>(manifestPath)?.version?.split("+")[0];
-    if (version) return version;
-  }
-  return "0.1.0";
-}
-
-function resolvePluginRoot(): string {
-  const currentFile = fileURLToPath(import.meta.url);
-  return resolve(dirname(currentFile), "..");
-}
-
-function resolveProductHome(): string {
-  const overridden = process.env.TONGHUASUN_AGENT_HOME?.trim() || process.env.TONGHUASUN_CODEX_HOME?.trim();
-  if (overridden) {
-    return resolve(expandEnvironmentVariables(overridden));
-  }
-
-  const localAppData = process.env.LOCALAPPDATA?.trim();
-  if (!localAppData) {
-    throw new Error("LOCALAPPDATA 不可用，无法确定用户级安装目录。");
-  }
-
-  return join(localAppData, "TonghuasunCodex");
-}
-
-function isHostRunning(): boolean {
-  try {
-    execFileSync(
-      "powershell.exe",
-      [
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        "if (Get-Process -Name happ -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"
-      ],
-      {
-        stdio: "ignore",
-        timeout: 5_000,
-        windowsHide: true
+    execFileSync("/bin/launchctl", ["bootout", `${domain}/${LAUNCH_AGENT_LABEL}`], { stdio: "ignore" });
+  } catch {
+    try {
+      if (existsSync(launchAgentPath())) {
+        execFileSync("/bin/launchctl", ["bootout", domain, launchAgentPath()], { stdio: "ignore" });
       }
-    );
+    } catch {
+      // 尚未安装或已经停止。
+    }
+  }
+}
+
+function launchAgentPath(): string {
+  return join(homedir(), "Library", "LaunchAgents", `${LAUNCH_AGENT_LABEL}.plist`);
+}
+
+async function waitForEndpoint(home: string, timeoutMs: number) {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    const endpoint = readEndpoint(home);
+    if (endpoint && isProcessRunning(endpoint.processId)) return endpoint;
+    await new Promise(resolve => setTimeout(resolve, 150));
+  }
+  return null;
+}
+
+async function canListen(port: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const server = createServer();
+    server.once("error", () => resolve(false));
+    server.listen(port, "127.0.0.1", () => server.close(() => resolve(true)));
+  });
+}
+
+function isProcessRunning(processId: number): boolean {
+  try {
+    process.kill(processId, 0);
     return true;
   } catch {
     return false;
   }
 }
 
-function ensureHttpUrlAcl(port: number): void {
-  const prefix = `http://+:${port}/`;
-  const user = execFileSync("whoami.exe", [], { encoding: "utf8", windowsHide: true }).trim();
-  const current = execFileSync("netsh.exe", ["http", "show", "urlacl", `url=${prefix}`], {
-    encoding: "utf8",
-    windowsHide: true
-  });
-  if (current.toLowerCase().includes(user.toLowerCase())) {
-    return;
-  }
+function resolvePluginRoot(): string {
+  return resolve(dirname(fileURLToPath(import.meta.url)), "..");
+}
 
-  if (/Reserved URL|保留的 URL|预留 URL/i.test(current)) {
-    throw new Error(`端口 ${port} 的 HTTP URL ACL 已属于其他用户，请先由管理员检查：${prefix}`);
+function safeChild(home: string, candidate: string): string {
+  const root = resolve(home);
+  const path = resolve(candidate);
+  const rel = relative(root, path);
+  if (!rel || rel === ".." || rel.startsWith(`..${sep}`)) {
+    throw new ServiceError("internal_error", `拒绝使用应用目录之外的路径：${path}`, 500);
   }
+  return path;
+}
 
-  // URL ACL 是 HttpListener 在普通用户权限下监听固定端口的前提。Windows 会显示标准 UAC，
-  // 用户拒绝时配置立即终止，不会绕过系统授权。
-  const elevatedCommand = [
-    `$process = Start-Process -FilePath 'netsh.exe' -Verb RunAs -Wait -PassThru -ArgumentList @(`,
-    `'http','add','urlacl','url=${prefix}','user=${user}','listen=yes','delegate=no'`,
-    `); exit $process.ExitCode`
-  ].join(" ");
-  const encodedCommand = Buffer.from(elevatedCommand, "utf16le").toString("base64");
-  try {
-    execFileSync("powershell.exe", ["-NoProfile", "-EncodedCommand", encodedCommand], {
-      stdio: "inherit",
-      windowsHide: false
-    });
-  } catch {
-    throw new Error(`无法为 ${prefix} 配置当前用户 URL ACL；请接受 Windows UAC 后重试。`);
+function assertSafeProductHome(value: string): void {
+  const path = resolve(value);
+  const userHome = resolve(homedir());
+  const broadTargets = new Set([
+    resolve("/"),
+    userHome,
+    join(userHome, "Library"),
+    join(userHome, "Library", "Application Support"),
+  ]);
+  if (broadTargets.has(path) || path.length < userHome.length + 8 || !/tonghuasun/i.test(path)) {
+    throw new ServiceError("invalid_request", `拒绝使用过宽的应用数据目录：${path}`, 400);
   }
 }
 
-function ensureHostStopped(): void {
-  if (isHostRunning()) {
-    throw new Error("检测到同花顺 happ.exe 正在运行。请先正常退出同花顺，再执行配置、修复或卸载。 ");
+function normalizePort(value: number): number {
+  if (!Number.isInteger(value) || value < 1_024 || value > 65_535) {
+    throw new ServiceError("invalid_request", "端口必须是 1024 到 65535 的整数。", 400);
+  }
+  return value;
+}
+
+function assertMacAndNode(): void {
+  if (process.platform !== "darwin") throw new ServiceError("invalid_request", "0.3.0 配置器仅支持 macOS。", 400);
+  const major = Number(process.versions.node.split(".")[0]);
+  if (!Number.isInteger(major) || major < 24) {
+    throw new ServiceError("invalid_request", `需要 Node.js 24 或更高版本，当前为 ${process.version}。`, 400);
   }
 }
 
-function isMappingHealthy(mapping: MappingRecord): boolean {
-  return canManageDestination(mapping);
+function xml(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 }
 
-function isSymbolicLink(filePath: string): boolean {
-  try {
-    return lstatSync(filePath).isSymbolicLink();
-  } catch {
-    return false;
+function parseArguments(args: string[]): Options {
+  const commandValue = args.find(value => !value.startsWith("--")) ?? "configure";
+  if (!(["configure", "repair", "status", "uninstall"] as const).includes(commandValue as Options["command"])) {
+    throw new ServiceError("invalid_request", `不支持的命令：${commandValue}`, 400);
   }
-}
-
-function hashFile(filePath: string): string {
-  const hash = createHash("sha256");
-  const buffer = readFileSync(filePath);
-  hash.update(buffer);
-  return hash.digest("hex");
-}
-
-function readJson<T>(filePath: string): T | null {
-  try {
-    return JSON.parse(readFileSync(filePath, "utf8")) as T;
-  } catch {
-    return null;
-  }
-}
-
-function writeJsonAtomic(filePath: string, value: unknown): void {
-  mkdirSync(dirname(filePath), { recursive: true });
-  const temporaryPath = `${filePath}.${process.pid}.tmp`;
-  const previousPath = `${filePath}.${process.pid}.previous`;
-  writeFileSync(temporaryPath, JSON.stringify(value, null, 2), "utf8");
-  hardenPrivateFileAcl(temporaryPath);
-  try {
-    if (existsSync(filePath)) {
-      renameSync(filePath, previousPath);
-    }
-    renameSync(temporaryPath, filePath);
-    if (existsSync(previousPath)) {
-      rmSync(previousPath, { force: true });
-    }
-  } catch (error) {
-    if (!existsSync(filePath) && existsSync(previousPath)) {
-      renameSync(previousPath, filePath);
-    }
-    if (existsSync(temporaryPath)) {
-      rmSync(temporaryPath, { force: true });
-    }
-    throw error;
-  }
-}
-
-function hardenPrivateFileAcl(filePath: string): void {
-  if (process.platform !== "win32") return;
-
-  const userSid = execFileSync(
-    "powershell.exe",
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
-    ],
-    { encoding: "utf8", windowsHide: true },
-  ).trim();
-  execFileSync(
-    "icacls.exe",
-    [
-      filePath,
-      "/inheritance:r",
-      "/grant:r",
-      `*${userSid}:(F)`,
-      "*S-1-5-18:(F)",
-      "*S-1-5-32-544:(F)",
-    ],
-    { stdio: "ignore", windowsHide: true },
-  );
-}
-
-function parseArguments(args: string[]): CliOptions {
-  const first = args[0]?.toLowerCase();
-  const command = first && !first.startsWith("--") ? first : "configure";
-  if (!(["configure", "repair", "status", "uninstall"] as string[]).includes(command)) {
-    throw new ConfigurationError("invalid_arguments", `未知命令：${command}`);
-  }
-
-  const values = first && !first.startsWith("--") ? args.slice(1) : args;
-  const options: CliOptions = {
-    command: command as CliOptions["command"],
-    force: false,
-    dryRun: false,
-    keepLegacyState: false,
-    mode: "auto",
-    json: false
+  const options: Options = {
+    command: commandValue as Options["command"],
+    json: args.includes("--json"),
+    check: args.includes("--check") || args.includes("--dry-run"),
+    purge: args.includes("--purge"),
   };
-
-  for (let index = 0; index < values.length; index++) {
-    const name = values[index];
-    if (name === "--json") {
-      options.json = true;
-      continue;
-    }
-    if (name === "--rotate-token") {
-      options.rotateToken = true;
-      continue;
-    }
-    if (name === "--force") {
-      options.force = true;
-      continue;
-    }
-    if (name === "--dry-run" || name === "--check") {
-      options.dryRun = true;
-      continue;
-    }
-    if (name === "--keep-legacy-state") {
-      options.keepLegacyState = true;
-      continue;
-    }
-
-    const value = values[++index];
-    if (!value) {
-      throw new Error(`${name} 缺少参数值。`);
-    }
-
-    switch (name) {
-      case "--ths-path":
-        options.thsPath = value;
-        break;
-      case "--payload":
-        options.payloadPath = value;
-        break;
-      case "--version":
-        options.version = value;
-        break;
-      case "--port":
-        options.port = validatePort(Number.parseInt(value, 10));
-        break;
-      case "--enable-trade-tools":
-        if (!(value === "true" || value === "false")) {
-          throw new Error("--enable-trade-tools 只支持 true 或 false。 ");
-        }
-        options.enableTradeTools = value === "true";
-        break;
-      case "--enable-automated-trade-api":
-        if (!(value === "true" || value === "false")) {
-          throw new Error("--enable-automated-trade-api 只支持 true 或 false。 ");
-        }
-        options.enableAutomatedTradeApi = value === "true";
-        break;
-      case "--mode":
-        if (!(["auto", "symlink", "copy"] as string[]).includes(value)) {
-          throw new Error("--mode 只支持 auto、symlink 或 copy。 ");
-        }
-        options.mode = value as DeploymentMode;
-        break;
-      default:
-        throw new ConfigurationError("invalid_arguments", `未知参数：${name}`);
-    }
-  }
-
+  const portIndex = args.indexOf("--port");
+  if (portIndex >= 0) options.port = Number(args[portIndex + 1]);
   return options;
 }
 
-function validatePort(port: number): number {
-  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
-    throw new ConfigurationError("invalid_port", `端口无效：${port}`);
-  }
-  return port;
-}
-
-function resolveLocalAccessToken(existingToken: string | undefined, rotateToken = false): string {
-  const normalized = existingToken?.trim() ?? "";
-  return !rotateToken && /^[a-f0-9]{64}$/i.test(normalized)
-    ? normalized
-    : randomBytes(32).toString("hex");
-}
-
-function createTimestamp(): string {
-  return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
-}
-
-function sanitizePathSegment(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._+-]/g, "-");
-}
-
-function formatDeploymentConflictMessage(conflicts: readonly DeploymentPlanItem[]): string {
-  const details = conflicts
-    .map((item) => `${item.fileName}（${item.reason}）`)
-    .join("、");
-  return `检测到可能属于其他插件或已被修改的同名文件：${details}。` +
-    "安装器未覆盖任何文件；确认文件归属后，可显式使用 --force。";
-}
-
-function normalizePath(filePath: string): string {
-  const normalized = resolve(filePath);
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
-function expandEnvironmentVariables(value: string): string {
-  return value.replace(/%([^%]+)%/g, (_match, name: string) => process.env[name] ?? `%${name}%`);
-}
-
-function formatErrorCode(error: unknown): string {
-  return error && typeof error === "object" && "code" in error ? ` 错误码：${String(error.code)}` : "";
-}
-
-function printResult(result: Record<string, unknown>, json: boolean): void {
-  if (json) {
-    console.log(JSON.stringify(result, null, 2));
-    return;
-  }
-
-  for (const [key, value] of Object.entries(result)) {
-    console.log(`${key}=${typeof value === "object" ? JSON.stringify(value) : String(value)}`);
-  }
+function print(value: unknown, json: boolean): void {
+  if (json) console.log(JSON.stringify(value, null, 2));
+  else console.log(JSON.stringify(value, null, 2));
 }
